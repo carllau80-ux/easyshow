@@ -1,0 +1,36 @@
+[package]
+name = "liteshow-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Liteshow — a lightweight, fast cross-platform image viewer"
+
+[[bin]]
+name = "liteshow"
+path = "src/main.rs"
+
+[dependencies]
+liteshow-core = { path = "../liteshow-core" }
+eframe = { workspace = true }
+clap = { workspace = true }
+crossbeam-channel = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+libc = "0.2"
+# rfd: 只用 xdg-portal 后端(纯 Rust/D-Bus);默认特性会拉入系统 wayland-client,需开发包
+rfd = { workspace = true }
+
+[build-dependencies]
+# 无条件引入:交叉编译时 [target.'cfg(windows)'] 的 build-dependencies 不会激活;
+# build.rs 内部按 CARGO_CFG_TARGET_OS 判断,非 Windows 目标不执行任何操作。
+winresource = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+# 资源管理器原生图标:SHGetFileInfoW / GDI 位图转换
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
+] }

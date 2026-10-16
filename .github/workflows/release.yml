@@ -1,0 +1,73 @@
+name: release
+
+# 三平台安装包构建(需要能访问 GitHub 的环境;本仓库在受限网络下的本机构建见 packaging/ 脚本)
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  linux:
+    name: Linux (.deb / tar.gz / AppImage)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: deb + tarball
+        run: bash packaging/build-linux.sh
+      - name: AppImage
+        run: |
+          set -euo pipefail
+          VERSION="$(awk -F'"' '/^\[workspace.package\]/{f=1} f&&/^version/{print $2; exit}' Cargo.toml)"
+          APP=build/appimage/Liteshow.AppDir
+          rm -rf "$APP"; mkdir -p "$APP/usr/bin" "$APP/usr/share/applications" "$APP/usr/share/icons/hicolor/256x256/apps"
+          install -m755 target/release/liteshow "$APP/usr/bin/liteshow"
+          sed 's#Exec=/usr/bin/liteshow#Exec=liteshow#' build/deb/liteshow_*_amd64/usr/share/applications/liteshow.desktop > "$APP/liteshow.desktop"
+          cp assets/icon-256.png "$APP/liteshow.png"
+          cp assets/icon-256.png "$APP/usr/share/icons/hicolor/256x256/apps/liteshow.png"
+          curl -fsSL -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ./appimagetool --appimage-extract-and-run "$APP" "dist/linux/Liteshow-${VERSION}-x86_64.AppImage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: liteshow-linux
+          path: dist/linux/*
+
+  windows:
+    name: Windows (zip / Setup.exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p liteshow-app
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+      - name: Package
+        shell: bash
+        env:
+          EXE: target/release/liteshow.exe
+          MAKENSIS: /c/Program Files (x86)/NSIS/makensis.exe
+        run: bash packaging/windows/make-package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: liteshow-windows
+          path: dist/windows/*
+
+  macos:
+    name: macOS (.app / .dmg, universal)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Bundle + dmg
+        run: bash packaging/macos/make-bundle.sh universal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: liteshow-macos
+          path: dist/macos/*
