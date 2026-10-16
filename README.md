@@ -18,6 +18,11 @@ cargo test -p liteshow-core                        # 解码 / EXIF / 缩放 / HE
 
 > 国内网络:本项目在 `~/.cargo/config.toml` 使用 USTC crates 镜像(见 PLAN 开发环境说明)。
 
+## 版本与发布
+
+- 版本号唯一来源:`Cargo.toml` 的 `[workspace.package]`(当前 **0.2.0**),每次发布用 `packaging/bump-version.sh patch|minor|major` 递增
+- 发布流程与 GitHub 上传步骤见 [docs/PUBLISHING.md](docs/PUBLISHING.md);打 `v*` 标签会触发三平台 CI 出包
+
 ## 文档
 
 - 📄 [功能清单 + 技术方案 + 里程碑](docs/PLAN.md)
