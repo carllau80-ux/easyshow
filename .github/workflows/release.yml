@@ -64,7 +64,8 @@ jobs:
           count=$(find build/win-dlls -name '*.dll' | wc -l)
           echo "closure DLLs: $count"
           if [ "$count" -lt 5 ]; then
-            echo "::error::HEIC DLL closure incomplete ($count files; mingw64 entries: $(ls /mingw64/bin | wc -l))"
+            diag=$(objdump -p "$(cygpath -w /mingw64/bin/libheif.dll)" 2>&1 | head -6 | tr '\n' '~')
+            echo "::error::HEIC DLL closure incomplete ($count files); objdump=$(command -v objdump); output=$diag"
             exit 1
           fi
       - name: Install NSIS
