@@ -52,28 +52,19 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
-          update: true
+          update: false
           install: mingw-w64-x86_64-libheif
       - name: Collect HEIC runtime DLL closure
-        shell: bash
+        shell: msys2 {0}
         run: |
           set -euo pipefail
-          {
-            echo '### HEIC DLL closure'
-            echo "mingw64/bin entries: $(ls /c/msys64/mingw64/bin 2>/dev/null | wc -l)"
-            ls -la /c/msys64/mingw64/bin/libheif.dll 2>&1 || true
-          } >> "$GITHUB_STEP_SUMMARY"
-          LIBHEIF_PATH="$(ls /c/msys64/mingw64/bin/libheif.dll 2>/dev/null || find /c/msys64 -name libheif.dll 2>/dev/null | head -1 || true)"
-          if [ -z "$LIBHEIF_PATH" ]; then
-            echo "::error::libheif.dll not found under C:\\msys64 (mingw64/bin entries: $(ls /c/msys64/mingw64/bin 2>/dev/null | wc -l))"
-            exit 1
-          fi
-          export PATH="/c/msys64/mingw64/bin:$PATH"
-          OBJDUMP=objdump bash packaging/windows/collect-dlls.sh "$(dirname "$LIBHEIF_PATH")" build/win-dlls libheif.dll
+          echo "MSYSTEM=$MSYSTEM  mingw64 entries: $(ls /mingw64/bin | wc -l)"
+          ls -la /mingw64/bin/libheif.dll
+          OBJDUMP=objdump bash packaging/windows/collect-dlls.sh /mingw64/bin build/win-dlls libheif.dll
           count=$(find build/win-dlls -name '*.dll' | wc -l)
-          echo "closure DLLs: $count" >> "$GITHUB_STEP_SUMMARY"
+          echo "closure DLLs: $count"
           if [ "$count" -lt 5 ]; then
-            echo "::error::HEIC DLL closure incomplete ($count files)"
+            echo "::error::HEIC DLL closure incomplete ($count files; mingw64 entries: $(ls /mingw64/bin | wc -l))"
             exit 1
           fi
       - name: Install NSIS
