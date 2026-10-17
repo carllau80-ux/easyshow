@@ -33,7 +33,7 @@ to_native() {
     if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
 }
 while [ ${#queue[@]} -gt 0 ]; do
-    name="$(basename "${queue[0]}")"; queue=("${queue[@]:1}")
+    name="$(basename "${queue[0]}")"; name="${name%$'\r'}"; queue=("${queue[@]:1}")
     lower="$(printf '%s' "$name" | tr 'A-Z' 'a-z')"
     [ -n "${seen[$lower]:-}" ] && continue
     if is_system "$lower"; then continue; fi
@@ -44,8 +44,9 @@ while [ ${#queue[@]} -gt 0 ]; do
     fi
     seen[$lower]="$src"
     while IFS= read -r dep; do
+        dep="${dep%$'\r'}"   # 兼容 Windows objdump 的 CRLF 输出
         [ -n "$dep" ] && queue+=("$dep")
-    done < <("$OBJDUMP" -p "$(to_native "$src")" 2>/dev/null | sed -n 's/.*DLL Name: //p')
+    done < <("$OBJDUMP" -p "$(to_native "$src")" 2>/dev/null | sed -n 's/.*DLL Name: //p' | tr -d '\r')
 done
 
 for lower in "${!seen[@]}"; do
