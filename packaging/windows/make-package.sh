@@ -138,6 +138,10 @@ make_zip "dist/windows/easyshow-$VERSION-windows-x86_64-full.zip" "$STAGE_FULL"
 make_zip "dist/windows/easyshow-$VERSION-windows-x86_64-lite.zip" "$STAGE_LITE"
 
 if [ -n "$MAKENSIS" ]; then
+    # makensis 是原生 Windows 程序:Git Bash 的 /d/... 路径它无法打开,需转成 Windows 路径
+    native_path() {
+        if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
+    }
     for variant in full lite; do
         case "$variant" in
             full) SRC="$ROOT/$STAGE_FULL"; OUT="$ROOT/$DIST/EasyShow-$VERSION-Full-Setup.exe" ;;
@@ -147,10 +151,10 @@ if [ -n "$MAKENSIS" ]; then
         "$MAKENSIS" -V2 -INPUTCHARSET UTF8 \
             -DVERSION="$VERSION" \
             -DVARIANT="$variant" \
-            -DSRC="$SRC" \
-            -DOUT="$OUT" \
-            -DICON="$ROOT/assets/icon.ico" \
-            "$ROOT/packaging/windows/easyshow.nsi" | tail -3
+            -DSRC="$(native_path "$SRC")" \
+            -DOUT="$(native_path "$OUT")" \
+            -DICON="$(native_path "$ROOT/assets/icon.ico")" \
+            "$(native_path "$ROOT/packaging/windows/easyshow.nsi")" | tail -3
     done
 else
     echo "!! 未找到 makensis,跳过安装包(可用便携 zip)"

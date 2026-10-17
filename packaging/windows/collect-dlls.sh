@@ -27,6 +27,11 @@ is_system() {
 
 declare -A seen=()
 queue=("$@")
+# objdump 在 Windows 上是原生程序:Git Bash/MSYS2 可能不自动转换 /c/... 路径,
+# 用 cygpath 转成 Windows 路径(cp/测试仍用 bash 路径)。
+to_native() {
+    if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
+}
 while [ ${#queue[@]} -gt 0 ]; do
     name="$(basename "${queue[0]}")"; queue=("${queue[@]:1}")
     lower="$(printf '%s' "$name" | tr 'A-Z' 'a-z')"
@@ -40,7 +45,7 @@ while [ ${#queue[@]} -gt 0 ]; do
     seen[$lower]="$src"
     while IFS= read -r dep; do
         [ -n "$dep" ] && queue+=("$dep")
-    done < <("$OBJDUMP" -p "$src" 2>/dev/null | sed -n 's/.*DLL Name: //p')
+    done < <("$OBJDUMP" -p "$(to_native "$src")" 2>/dev/null | sed -n 's/.*DLL Name: //p')
 done
 
 for lower in "${!seen[@]}"; do

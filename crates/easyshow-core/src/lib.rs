@@ -14,7 +14,7 @@ use std::path::Path;
 
 pub use codec::{decode_file, from_extension, probe, Format};
 pub use error::{Error, Result};
-pub use exif::ExifSummary;
+pub use exif::{read_gps, read_summary, ExifSummary};
 pub use image_buf::ImageBuf;
 
 /// Image dimensions without decoding pixels (JPEG/PNG/... read headers;

@@ -86,6 +86,20 @@ pub fn toolbar(app: &mut EasyShowApp, ui: &mut egui::Ui) {
         }
         toolbar_sep(ui);
 
+        // 地图模式切换(网格 ↔ 地图)
+        if app.mode == Mode::Map {
+            if icon_toggle(ui, icons::MAP_TRIFOLD, tr(lang, Key::BackToGrid), true).clicked() {
+                app.exit_map_to_grid(ui.ctx());
+            }
+        } else if app.mode == Mode::Grid {
+            let map_resp =
+                icon_button(ui, icons::MAP_TRIFOLD, tr(lang, Key::Map), !app.entries.is_empty());
+            if map_resp.clicked() {
+                app.enter_map(ui.ctx());
+            }
+        }
+        toolbar_sep(ui);
+
         let has_images = !app.entries.is_empty();
         if icon_button(ui, icons::CARET_LEFT, tr(lang, Key::Prev), has_images).clicked() {
             app.prev(ui.ctx());
@@ -120,6 +134,19 @@ pub fn toolbar(app: &mut EasyShowApp, ui: &mut egui::Ui) {
             }
             if icon_button(ui, icons::FLIP_HORIZONTAL, tr(lang, Key::Flip), true).clicked() {
                 app.action_flip(ui.ctx());
+            }
+        }
+
+        if app.mode == Mode::Map {
+            toolbar_sep(ui);
+            if icon_button(ui, icons::MAGNIFYING_GLASS_MINUS, tr(lang, Key::ZoomOut), true).clicked() {
+                app.zoom_map_steps(-1.0);
+            }
+            if icon_button(ui, icons::MAGNIFYING_GLASS_PLUS, tr(lang, Key::ZoomIn), true).clicked() {
+                app.zoom_map_steps(1.0);
+            }
+            if icon_button(ui, icons::CORNERS_OUT, tr(lang, Key::FitPhotos), true).clicked() {
+                app.fit_map_to_photos();
             }
         }
 
@@ -163,6 +190,38 @@ pub fn toolbar(app: &mut EasyShowApp, ui: &mut egui::Ui) {
                         .clicked()
                     {
                         pick_interval = Some(secs);
+                    }
+                }
+                ui.separator();
+                let mut online = app.net.online;
+                if ui.checkbox(&mut online, tr(lang, Key::EnableOnline)).changed() {
+                    app.set_online(ui.ctx(), online);
+                }
+                ui.small(tr(lang, Key::OnlinePrivacy));
+                if app.net.online {
+                    ui.add_space(2.0);
+                    ui.horizontal(|ui| {
+                        ui.label(tr(lang, Key::AmapKey));
+                        let mut key = app.net.amap_key.clone();
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut key)
+                                .desired_width(150.0)
+                                .hint_text(tr(lang, Key::AmapKeyHint)),
+                        );
+                        if response.changed() {
+                            app.set_amap_key(key);
+                        }
+                    });
+                    ui.small(tr(lang, Key::AmapKeyHelp));
+                    ui.label(tr(lang, Key::TileSource));
+                    for (source, label) in [
+                        (crate::config::TileSource::Auto, Key::TileAuto),
+                        (crate::config::TileSource::Amap, Key::TileAmap),
+                        (crate::config::TileSource::Osm, Key::TileOsm),
+                    ] {
+                        if ui.radio(app.net.tile_source == source, tr(lang, label)).clicked() {
+                            app.set_tile_source(source);
+                        }
                     }
                 }
                 ui.separator();
@@ -220,7 +279,8 @@ pub fn toolbar(app: &mut EasyShowApp, ui: &mut egui::Ui) {
             }
 
             // 删除(默认只读;未开启时禁用)
-            let has_target = (app.mode == Mode::Grid && !app.selection.is_empty())
+            let has_target = ((app.mode == Mode::Grid || app.mode == Mode::Map)
+                && !app.selection.is_empty())
                 || (app.mode == Mode::Viewer && app.current.is_some());
             if icon_button(ui, icons::TRASH, tr(lang, Key::Delete), app.delete_enabled && has_target)
                 .clicked()
@@ -237,8 +297,7 @@ pub fn toolbar(app: &mut EasyShowApp, ui: &mut egui::Ui) {
         app.toggle_sort_direction();
     }
     if let Some(lang) = pick_lang {
-        app.lang = lang;
-        app.relabel_tree_root();
+        app.set_language(lang);
     }
     if let Some(mode) = pick_theme {
         app.set_theme_mode(ui.ctx(), mode);
@@ -622,7 +681,19 @@ pub fn info_panel(app: &mut EasyShowApp, ui: &mut egui::Ui) {
                 kv(ui, tr(lang, Key::Taken), taken.clone());
             }
             if let Some((lat, lon)) = exif.gps {
-                kv(ui, tr(lang, Key::Location), format!("{lat:.6}, {lon:.6}"));
+                let coords = format!("{lat:.6}, {lon:.6}");
+                let place_label = app.place.as_ref().and_then(|p| p.label());
+                let value = if let Some(label) = &place_label {
+                    label.clone()
+                } else if app.place_loading {
+                    tr(lang, Key::Locating).to_string()
+                } else {
+                    coords.clone()
+                };
+                kv(ui, tr(lang, Key::Location), value);
+                if place_label.is_some() {
+                    kv(ui, tr(lang, Key::Coordinates), coords);
+                }
             }
         }
         None => {
@@ -677,6 +748,18 @@ pub fn status(app: &mut EasyShowApp, ui: &mut egui::Ui) {
                 ui.weak(tr(lang, Key::Loading));
             } else if app.mode == Mode::Viewer {
                 ui.weak(app.zoom_label());
+            } else if app.mode == Mode::Map {
+                let with_location = app
+                    .entries
+                    .iter()
+                    .filter(|e| app.geo_points.get(&e.path).copied().flatten().is_some())
+                    .count();
+                ui.weak(
+                    tr(lang, Key::MapPhotos)
+                        .replace("{n}", &with_location.to_string())
+                        .replace("{m}", &app.entries.len().to_string()),
+                );
+                ui.weak(format!("z {:.1}", app.map.zoom));
             } else {
                 ui.weak(tr(lang, Key::GridHint));
             }

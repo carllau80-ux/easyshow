@@ -85,6 +85,13 @@ pub fn read_summary(path: &Path) -> Option<ExifSummary> {
     }
 }
 
+/// 只读取 GPS 坐标(纬度, 经度)。用于地图模式的批量扫描——比 `read_summary`
+/// 少做全部字段格式化,适合成千上万张照片的后台遍历。
+pub fn read_gps(path: &Path) -> Option<(f64, f64)> {
+    let exif = read_exif(path)?;
+    gps_coordinates(&exif)
+}
+
 /// GPS 纬度/经度 → 十进制度(南纬/西经取负)。
 fn gps_coordinates(exif: &exif::Exif) -> Option<(f64, f64)> {
     fn dms(exif: &exif::Exif, tag: exif::Tag) -> Option<f64> {

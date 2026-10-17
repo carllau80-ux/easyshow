@@ -133,7 +133,7 @@ fn cache_file_for(path: &Path) -> Option<PathBuf> {
     Some(cache_root()?.join("thumbs").join(&key[..2]).join(format!("{key}.jpg")))
 }
 
-fn cache_root() -> Option<PathBuf> {
+pub(crate) fn cache_root() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("EasyShow"))

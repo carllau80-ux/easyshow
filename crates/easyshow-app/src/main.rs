@@ -1,14 +1,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod config;
 mod decode;
 mod fonts;
+mod geo;
+mod geocode;
+mod geo_scan;
 mod i18n;
 mod icons;
+mod map;
 mod shell_icons;
 mod sort;
 mod theme;
 mod thumbs;
+mod tiles;
 mod tree;
 mod ui;
 mod viewer;

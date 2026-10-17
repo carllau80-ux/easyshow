@@ -57,8 +57,19 @@ jobs:
       - name: Collect HEIC runtime DLL closure
         shell: bash
         run: |
+          set -euo pipefail
+          {
+            echo '### HEIC DLL closure'
+            ls -la /c/msys64/mingw64/bin/libheif.dll || echo 'libheif.dll MISSING'
+          } >> "$GITHUB_STEP_SUMMARY"
           export PATH="/c/msys64/mingw64/bin:$PATH"
           OBJDUMP=objdump bash packaging/windows/collect-dlls.sh /c/msys64/mingw64/bin build/win-dlls libheif.dll
+          count=$(find build/win-dlls -name '*.dll' | wc -l)
+          echo "closure DLLs: $count" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -lt 5 ]; then
+            echo "::error::HEIC DLL closure incomplete ($count files)"
+            exit 1
+          fi
       - name: Install NSIS
         run: choco install nsis -y --no-progress
       - name: Build + package (full + lite)
@@ -67,8 +78,15 @@ jobs:
           MAKENSIS: /c/Program Files (x86)/NSIS/makensis.exe
           LIBS_DIR: build/win-dlls
         run: |
+          set -o pipefail
           if ! bash packaging/windows/make-package.sh > build-package.log 2>&1; then
-            while IFS= read -r line; do echo "::error::${line}"; done < <(tail -n 30 build-package.log)
+            {
+              echo '### Windows packaging failed'
+              echo '```'
+              tail -n 150 build-package.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            tail -n 8 build-package.log | while IFS= read -r line; do echo "::error::${line}"; done
             exit 1
           fi
           tail -n 30 build-package.log
@@ -88,8 +106,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Bundle + dmg (full + lite)
         run: |
+          set -o pipefail
           if ! bash packaging/macos/make-bundle.sh universal both > build-bundle.log 2>&1; then
-            while IFS= read -r line; do echo "::error::${line}"; done < <(tail -n 30 build-bundle.log)
+            {
+              echo '### macOS packaging failed'
+              echo '```'
+              tail -n 150 build-bundle.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            tail -n 8 build-bundle.log | while IFS= read -r line; do echo "::error::${line}"; done
             exit 1
           fi
           tail -n 30 build-bundle.log

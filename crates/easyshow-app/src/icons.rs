@@ -24,6 +24,7 @@ pub const ARROW_UP: &str = "\u{E08E}";
 pub const ARROW_DOWN: &str = "\u{E03E}";
 pub const SLIDESHOW: &str = "\u{ED32}";
 pub const TRASH: &str = "\u{E4A6}";
+pub const MAP_TRIFOLD: &str = "\u{E31A}";
 pub const FOLDER: &str = "\u{E24A}";
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const HARD_DRIVE: &str = "\u{E29E}";

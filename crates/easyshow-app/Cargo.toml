@@ -25,6 +25,11 @@ libc = "0.2"
 trash = { workspace = true }
 # rfd: 只用 xdg-portal 后端(纯 Rust/D-Bus);默认特性会拉入系统 wayland-client,需开发包
 rfd = { workspace = true }
+# 地图瓦片解码(复用 core 已编译的 image,不新增包)
+image = { workspace = true }
+# 联网:地名逆编码(高德/OSM)+ 在线瓦片
+ureq = { workspace = true }
+serde_json = { workspace = true }
 
 [build-dependencies]
 # 无条件引入:交叉编译时 [target.'cfg(windows)'] 的 build-dependencies 不会激活;

@@ -1,7 +1,7 @@
 //! Application state and the eframe glue.
 //!
-//! Two modes: a thumbnail **grid** for the selected directory, and a single
-//! image **viewer**. A directory tree on the left, file/EXIF info on the right.
+//! Three modes: a thumbnail **grid**, a single-image **viewer**, and a **map**
+//! of geotagged photos. A directory tree on the left, file/EXIF info on the right.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -10,11 +10,15 @@ use std::sync::Arc;
 use eframe::egui;
 use easyshow_core::{ExifSummary, ImageBuf};
 
+use crate::config::{self, NetConfig, TileSource};
 use crate::decode::{DecodeEvent, DecodeService, Purpose};
+use crate::geocode::{GeocodeService, Place};
+use crate::geo_scan::{GeoScanService, ScanItem};
 use crate::i18n::{tr, Key, Lang};
 use crate::sort::{scan_entries, sort_entries, ImageEntry, SortKey};
 use crate::theme::{self, ThemeMode};
 use crate::thumbs::ThumbService;
+use crate::tiles::{TileKey, TileKind, TileService};
 use crate::tree::TreeNode;
 use crate::viewer::{Viewer, ZoomMode};
 
@@ -22,6 +26,8 @@ use crate::viewer::{Viewer, ZoomMode};
 pub enum Mode {
     Grid,
     Viewer,
+    /// 地图模式:当前目录带 GPS 的照片聚合展示。
+    Map,
 }
 
 pub struct CurrentImage {
@@ -111,6 +117,31 @@ pub struct EasyShowApp {
     /// 资源管理器原生图标(仅 Windows;懒加载)。
     pub shell_icons: Option<crate::shell_icons::ShellIcons>,
     shell_icons_tried: bool,
+    // --- 联网 / 地名(默认关闭,设置中开启) ---
+    pub net: NetConfig,
+    geocode: GeocodeService,
+    pub place: Option<Place>,
+    pub place_loading: bool,
+    place_generation: u64,
+    // --- 地图模式 ---
+    pub map: crate::geo::MapState,
+    pub map_area: egui::Vec2,
+    pub geo_points: HashMap<PathBuf, Option<(f64, f64)>>,
+    geo_scan: GeoScanService,
+    geo_scan_generation: u64,
+    geo_scan_dir: Option<PathBuf>,
+    pub geo_scanned: usize,
+    pub geo_total: usize,
+    geo_fitted: bool,
+    pub(crate) tiles: TileService,
+    pub tile_tex: HashMap<(TileKind, TileKey), egui::TextureHandle>,
+    tile_order: VecDeque<(TileKind, TileKey)>,
+    pub(crate) tile_inflight: HashSet<(TileKind, TileKey)>,
+    pub(crate) tile_failed: HashSet<(TileKind, TileKey)>,
+    pub(crate) tile_generation: u64,
+    pub world_land: Option<egui::TextureHandle>,
+    pub world_borders: Option<egui::TextureHandle>,
+    pub world_map_loaded: bool,
 }
 
 /// 平台根节点:
@@ -258,6 +289,7 @@ fn normalize_path(path: PathBuf) -> PathBuf {
 
 const PREFETCH_CAP: usize = 4;
 const THUMB_CACHE_CAP: usize = 512;
+const TILE_TEX_CAP: usize = 512;
 
 impl EasyShowApp {
     pub fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>) -> Self {
@@ -308,7 +340,31 @@ impl EasyShowApp {
             theme_mode: ThemeMode::System,
             shell_icons: None,
             shell_icons_tried: false,
+            net: config::load(),
+            geocode: GeocodeService::new(),
+            place: None,
+            place_loading: false,
+            place_generation: 0,
+            map: crate::geo::MapState::default(),
+            map_area: egui::vec2(1000.0, 700.0),
+            geo_points: HashMap::new(),
+            geo_scan: GeoScanService::new(),
+            geo_scan_generation: 0,
+            geo_scan_dir: None,
+            geo_scanned: 0,
+            geo_total: 0,
+            geo_fitted: false,
+            tiles: TileService::new(),
+            tile_tex: HashMap::new(),
+            tile_order: VecDeque::new(),
+            tile_inflight: HashSet::new(),
+            tile_failed: HashSet::new(),
+            tile_generation: 0,
+            world_land: None,
+            world_borders: None,
+            world_map_loaded: false,
         };
+        app.geocode.sync_config(&app.net);
         match path {
             Some(p) if p.is_file() => app.open_path(&cc.egui_ctx, p),
             Some(p) if p.is_dir() => app.open_path(&cc.egui_ctx, p),
@@ -357,6 +413,20 @@ impl EasyShowApp {
         self.slideshow = None;
         self.thumb_generation += 1;
         self.thumb_inflight.clear();
+        // 目录切换:重置地图/地名状态(位置扫描在进入地图模式时按需启动)
+        self.geo_points.clear();
+        self.geo_scanned = 0;
+        self.geo_total = 0;
+        self.geo_scan_dir = None;
+        self.geo_fitted = false;
+        self.place = None;
+        self.place_loading = false;
+        self.tile_tex.clear();
+        self.tile_order.clear();
+        self.tile_inflight.clear();
+        self.tile_failed.clear();
+        self.tile_generation = self.tiles.bump_generation();
+        self.tiles.clear_wanted();
         self.mode = mode;
         self.error = None;
         self.tree_root.expand_to(&dir);
@@ -533,7 +603,7 @@ impl EasyShowApp {
             return;
         }
         let paths: Vec<PathBuf> = match self.mode {
-            Mode::Grid if !self.selection.is_empty() => self
+            Mode::Grid | Mode::Map if !self.selection.is_empty() => self
                 .selection
                 .iter()
                 .filter_map(|i| self.entries.get(*i))
@@ -604,6 +674,258 @@ impl EasyShowApp {
     }
 
     // ------------------------------------------------------------------
+    // 联网 / 地名 / 地图
+    // ------------------------------------------------------------------
+
+    /// 当前应使用的在线瓦片源(联网关闭 → None)。
+    pub fn tile_kind(&self) -> Option<TileKind> {
+        crate::map::tile_kind(self)
+    }
+
+    pub fn max_map_zoom(&self) -> f64 {
+        if self.tile_kind().is_some() {
+            crate::map::MAX_ZOOM_ONLINE
+        } else {
+            crate::map::MAX_ZOOM_OFFLINE
+        }
+    }
+
+    /// 当前照片的位置名称:联网开启且有 GPS 时异步请求逆地理编码。
+    fn refresh_place(&mut self) {
+        self.place = None;
+        self.place_loading = false;
+        let Some((path, lat, lon)) = self.info.as_ref().and_then(|info| {
+            let (lat, lon) = info.exif.as_ref()?.gps?;
+            Some((info.path.clone(), lat, lon))
+        }) else {
+            return;
+        };
+        if !self.net.online {
+            return;
+        }
+        self.geocode.sync_config(&self.net);
+        self.place_loading = true;
+        self.place_generation = self.geocode.request(path, lat, lon);
+    }
+
+    /// 切换联网总开关(持久化;关掉时立即停止一切网络请求)。
+    pub fn set_online(&mut self, ctx: &egui::Context, online: bool) {
+        let was_amap = self.tile_kind() == Some(TileKind::Amap);
+        self.net.online = online;
+        config::save(&self.net);
+        self.geocode.sync_config(&self.net);
+        self.tile_generation = self.tiles.bump_generation();
+        self.tile_tex.clear();
+        self.tile_order.clear();
+        self.tile_inflight.clear();
+        self.tile_failed.clear();
+        let now_amap = self.tile_kind() == Some(TileKind::Amap);
+        self.map_switch_crs(was_amap, now_amap);
+        if self.tile_kind().is_none() {
+            self.map.zoom = self.map.zoom.min(crate::map::MAX_ZOOM_OFFLINE);
+        }
+        self.refresh_place();
+        ctx.request_repaint();
+    }
+
+    /// 更新高德 Key(持久化并立即重试当前照片的解析)。
+    pub fn set_amap_key(&mut self, key: String) {
+        if self.net.amap_key == key {
+            return;
+        }
+        self.net.amap_key = key;
+        config::save(&self.net);
+        self.geocode.sync_config(&self.net);
+        self.refresh_place();
+    }
+
+    /// 切换地图底图来源。
+    pub fn set_tile_source(&mut self, source: TileSource) {
+        if self.net.tile_source == source {
+            return;
+        }
+        let was_amap = self.tile_kind() == Some(TileKind::Amap);
+        self.net.tile_source = source;
+        config::save(&self.net);
+        self.tile_generation = self.tiles.bump_generation();
+        self.tile_tex.clear();
+        self.tile_order.clear();
+        self.tile_inflight.clear();
+        self.tile_failed.clear();
+        self.map_switch_crs(was_amap, self.tile_kind() == Some(TileKind::Amap));
+        self.map.zoom = self.map.zoom.min(self.max_map_zoom());
+    }
+
+    /// 切换底图坐标系时保持视野中心(高德瓦片为 GCJ-02,其余为 WGS-84)。
+    fn map_switch_crs(&mut self, from_gcj: bool, to_gcj: bool) {
+        if from_gcj == to_gcj {
+            return;
+        }
+        self.map.center = if to_gcj {
+            crate::geo::wgs84_to_gcj02(self.map.center)
+        } else {
+            crate::geo::gcj02_to_wgs84(self.map.center)
+        };
+    }
+
+    pub fn enter_map(&mut self, ctx: &egui::Context) {
+        log::debug!("enter_map: mode={:?} entries={}", self.mode, self.entries.len());
+        if self.mode == Mode::Map {
+            return;
+        }
+        self.ensure_identity_order();
+        self.slideshow = None;
+        self.mode = Mode::Map;
+        self.set_visible_thumbs(Vec::new());
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+            "{} — EasyShow",
+            tr(self.lang, Key::Map)
+        )));
+        if self.geo_scan_dir.as_ref() != Some(&self.current_dir) {
+            self.start_geo_scan();
+        }
+        if self.geo_points.values().flatten().next().is_some() {
+            self.geo_fitted = true;
+            self.fit_map_to_photos();
+        }
+    }
+
+    pub fn exit_map_to_grid(&mut self, ctx: &egui::Context) {
+        self.mode = Mode::Grid;
+        self.refresh_info();
+        let title = self
+            .current_path()
+            .map(|p| file_name(p))
+            .unwrap_or_else(|| file_name(&self.current_dir));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{title} — EasyShow")));
+    }
+
+    /// 把视野适配到当前目录全部带 GPS 的照片。
+    pub fn fit_map_to_photos(&mut self) {
+        let gcj = self.tile_kind() == Some(TileKind::Amap);
+        let points: Vec<(f64, f64)> = self
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                self.geo_points.get(&entry.path).copied().flatten().map(|latlon| {
+                    let ll = if gcj { crate::geo::wgs84_to_gcj02(latlon) } else { latlon };
+                    crate::geo::lonlat_to_world(ll)
+                })
+            })
+            .collect();
+        if points.is_empty() {
+            return;
+        }
+        let size = (self.map_area.x as f64, self.map_area.y as f64);
+        self.map.fit_world(&points, size, 60.0, 0.0, self.max_map_zoom());
+    }
+
+    /// 工具栏/键盘的缩放(以视图中心为锚,每格 1.15×)。
+    pub fn zoom_map_steps(&mut self, steps: f32) {
+        let size = (self.map_area.x as f64, self.map_area.y as f64);
+        if size.0 <= 8.0 || size.1 <= 8.0 {
+            return;
+        }
+        let center = (size.0 / 2.0, size.1 / 2.0);
+        self.map.zoom_by_steps(center, size, steps, 0.0, self.max_map_zoom());
+        self.tile_failed.clear();
+    }
+
+    /// 进入地图前按需启动目录 GPS 扫描。
+    fn start_geo_scan(&mut self) {
+        self.geo_scan_dir = Some(self.current_dir.clone());
+        self.geo_points.clear();
+        self.geo_scanned = 0;
+        self.geo_total = self.entries.len();
+        self.geo_fitted = false;
+        let items: Vec<ScanItem> = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| ScanItem {
+                index,
+                path: entry.path.clone(),
+                mtime: entry
+                    .modified
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            })
+            .collect();
+        self.geo_scan_generation = self.geo_scan.start(self.current_dir.clone(), items);
+    }
+
+    fn poll_geo_scan(&mut self) {
+        while let Some(event) = self.geo_scan.try_recv() {
+            if event.generation != self.geo_scan_generation {
+                continue;
+            }
+            self.geo_scanned += event.results.len();
+            for (index, gps) in event.results {
+                if let Some(entry) = self.entries.get(index) {
+                    self.geo_points.insert(entry.path.clone(), gps);
+                }
+            }
+            if event.done && !self.geo_fitted {
+                self.geo_fitted = true;
+                if self.mode == Mode::Map {
+                    self.fit_map_to_photos();
+                }
+            }
+        }
+    }
+
+    fn poll_geocode(&mut self) {
+        while let Some(reply) = self.geocode.try_recv() {
+            if reply.generation != self.place_generation {
+                continue;
+            }
+            let current = self.info.as_ref().map(|i| i.path.clone());
+            if current.as_ref() != Some(&reply.path) {
+                continue;
+            }
+            self.place = reply.place;
+            self.place_loading = false;
+        }
+    }
+
+    fn poll_tiles(&mut self, ctx: &egui::Context) {
+        while let Some(reply) = self.tiles.try_recv() {
+            let key = (reply.kind, reply.key);
+            self.tile_inflight.remove(&key);
+            if reply.generation != self.tile_generation {
+                continue;
+            }
+            match reply.image {
+                Some(image) => {
+                    let color = egui::ColorImage::from_rgba_unmultiplied(
+                        [image.width as usize, image.height as usize],
+                        &image.rgba,
+                    );
+                    let name = format!(
+                        "tile-{}-{}-{}-{}",
+                        reply.kind.tag(),
+                        reply.key.z,
+                        reply.key.x,
+                        reply.key.y
+                    );
+                    let texture = ctx.load_texture(name, color, egui::TextureOptions::LINEAR);
+                    self.tile_tex.insert(key, texture);
+                    self.tile_order.push_back(key);
+                    while self.tile_order.len() > TILE_TEX_CAP {
+                        if let Some(old) = self.tile_order.pop_front() {
+                            self.tile_tex.remove(&old);
+                        }
+                    }
+                }
+                None => {
+                    self.tile_failed.insert(key);
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Theme / language
     // ------------------------------------------------------------------
 
@@ -616,6 +938,26 @@ impl EasyShowApp {
     pub fn relabel_tree_root(&mut self) {
         if cfg!(windows) {
             self.tree_root.set_name(tr(self.lang, Key::ThisPC));
+        }
+    }
+
+    /// 切换界面语言。自动底图按语言选择(中文=高德 GCJ-02,英文=OSM),
+    /// 因此切换语言时需要转换视野坐标系并丢弃已下载的旧底图纹理。
+    pub fn set_language(&mut self, lang: Lang) {
+        if self.lang == lang {
+            return;
+        }
+        let was_amap = self.tile_kind() == Some(TileKind::Amap);
+        self.lang = lang;
+        self.relabel_tree_root();
+        let now_amap = self.tile_kind() == Some(TileKind::Amap);
+        if was_amap != now_amap {
+            self.map_switch_crs(was_amap, now_amap);
+            self.tile_generation = self.tiles.bump_generation();
+            self.tile_tex.clear();
+            self.tile_order.clear();
+            self.tile_inflight.clear();
+            self.tile_failed.clear();
         }
     }
 
@@ -838,6 +1180,8 @@ impl EasyShowApp {
             format,
             exif,
         });
+        // 位置名称(联网开启时异步解析;其余情况显示坐标)
+        self.refresh_place();
     }
 
     // ------------------------------------------------------------------
@@ -929,7 +1273,7 @@ impl EasyShowApp {
         use egui::Key;
         let (
             right, left, up, down, home, end, enter, escape, space, delete_key, select_all,
-            zoom_in, zoom_out, fit_key, actual_key, rotate_key, flip_key, full_key,
+            zoom_in, zoom_out, fit_key, actual_key, rotate_key, flip_key, full_key, map_key,
         ) = ctx.input(|i| {
             let command = i.modifiers.ctrl || i.modifiers.command;
             (
@@ -951,6 +1295,7 @@ impl EasyShowApp {
                 i.key_pressed(Key::R),
                 i.key_pressed(Key::F),
                 i.key_pressed(Key::F11),
+                i.key_pressed(Key::M),
             )
         });
 
@@ -983,6 +1328,9 @@ impl EasyShowApp {
                 }
                 if enter {
                     self.open_selected_in_viewer(ctx);
+                }
+                if map_key {
+                    self.enter_map(ctx);
                 }
             }
             Mode::Viewer => {
@@ -1032,6 +1380,45 @@ impl EasyShowApp {
                     } else {
                         self.exit_to_grid();
                     }
+                }
+            }
+            Mode::Map => {
+                if escape || map_key {
+                    self.exit_map_to_grid(ctx);
+                }
+                if zoom_in {
+                    self.zoom_map_steps(1.0);
+                }
+                if zoom_out {
+                    self.zoom_map_steps(-1.0);
+                }
+                if fit_key {
+                    self.fit_map_to_photos();
+                }
+                if home {
+                    self.select(0);
+                }
+                if end {
+                    self.select(self.entries.len().saturating_sub(1));
+                }
+                if enter {
+                    self.open_selected_in_viewer(ctx);
+                }
+                if delete_key {
+                    self.request_delete();
+                }
+                let step = 80.0;
+                if left {
+                    self.map.pan_px(step, 0.0);
+                }
+                if right {
+                    self.map.pan_px(-step, 0.0);
+                }
+                if up {
+                    self.map.pan_px(0.0, step);
+                }
+                if down {
+                    self.map.pan_px(0.0, -step);
                 }
             }
         }
@@ -1102,6 +1489,9 @@ impl eframe::App for EasyShowApp {
 
         self.poll_decode(&ctx);
         self.poll_thumbs();
+        self.poll_geo_scan();
+        self.poll_geocode();
+        self.poll_tiles(&ctx);
         self.handle_keys(&ctx);
         self.tick_slideshow(&ctx);
 
@@ -1121,8 +1511,8 @@ impl eframe::App for EasyShowApp {
             units
         });
 
-        // 浏览模式下没有网格:清空缩略图可见集,避免后台继续解析
-        if self.mode == Mode::Viewer {
+        // 非网格模式下清空缩略图可见集,避免后台继续解析
+        if self.mode != Mode::Grid {
             self.set_visible_thumbs(Vec::new());
         }
 
@@ -1145,13 +1535,19 @@ impl eframe::App for EasyShowApp {
         egui::CentralPanel::no_frame().show(ui, |ui| match self.mode {
             Mode::Grid => crate::ui::grid(self, ui),
             Mode::Viewer => crate::ui::canvas(self, ui),
+            Mode::Map => crate::map::map_view(self, ui),
         });
 
         // 删除二次确认(模态)
         crate::ui::delete_modal(self, &ctx);
 
         // eframe is event-driven: keep frames coming while work is in flight.
-        if self.loading || !self.thumb_inflight.is_empty() {
+        if self.loading
+            || !self.thumb_inflight.is_empty()
+            || !self.tile_inflight.is_empty()
+            || self.place_loading
+            || self.geo_scanned < self.geo_total
+        {
             ctx.request_repaint();
         }
     }
