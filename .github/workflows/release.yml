@@ -53,18 +53,22 @@ jobs:
         with:
           msystem: MINGW64
           update: false
-          install: mingw-w64-x86_64-libheif
+          install: mingw-w64-x86_64-libheif mingw-w64-x86_64-binutils
       - name: Collect HEIC runtime DLL closure
         shell: msys2 {0}
         run: |
           set -euo pipefail
           echo "MSYSTEM=$MSYSTEM  mingw64 entries: $(ls /mingw64/bin | wc -l)"
           ls -la /mingw64/bin/libheif.dll
+          if ! command -v objdump >/dev/null 2>&1; then
+            echo "::error::objdump missing in msys2 MINGW64 environment"
+            exit 1
+          fi
           OBJDUMP=objdump bash packaging/windows/collect-dlls.sh /mingw64/bin build/win-dlls libheif.dll
           count=$(find build/win-dlls -name '*.dll' | wc -l)
           echo "closure DLLs: $count"
           if [ "$count" -lt 5 ]; then
-            diag=$(objdump -p "$(cygpath -w /mingw64/bin/libheif.dll)" 2>&1 | head -6 | tr '\n' '~')
+            diag=$(objdump -p "$(cygpath -w /mingw64/bin/libheif.dll)" 2>&1 | head -6 | tr '\n' '~' || true)
             echo "::error::HEIC DLL closure incomplete ($count files); objdump=$(command -v objdump); output=$diag"
             exit 1
           fi
