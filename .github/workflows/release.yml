@@ -1,11 +1,14 @@
 name: release
 
-# 三平台安装包构建(完整版 full + 轻量版 lite)。
+# 三平台安装包构建(完整版 full + 轻量版 lite),打 v* 标签时自动创建 GitHub Release 并附带产物。
 # 需要能访问 GitHub 的环境;受限网络下的本机构建见 packaging/ 脚本。
 on:
   workflow_dispatch:
   push:
     tags: ["v*"]
+
+permissions:
+  contents: write # Release 创建/资产上传
 
 jobs:
   linux:
@@ -46,13 +49,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-libheif
+      - name: Collect HEIC runtime DLL closure
+        shell: bash
+        run: |
+          export PATH="/c/msys64/mingw64/bin:$PATH"
+          OBJDUMP=objdump bash packaging/windows/collect-dlls.sh /c/msys64/mingw64/bin build/win-dlls libheif.dll
       - name: Install NSIS
         run: choco install nsis -y --no-progress
       - name: Build + package (full + lite)
         shell: bash
         env:
           MAKENSIS: /c/Program Files (x86)/NSIS/makensis.exe
-          # CI 无 libheif DLL 闭包:完整版 zip 不含 DLL(HEIC 依赖系统 libheif)
+          LIBS_DIR: build/win-dlls
         run: bash packaging/windows/make-package.sh
       - uses: actions/upload-artifact@v4
         with:
@@ -74,3 +87,31 @@ jobs:
         with:
           name: easyshow-macos
           path: dist/macos/*
+
+  release:
+    name: GitHub Release(附带全部二进制包)
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/**/*.deb
+            dist/**/*.tar.gz
+            dist/**/*.zip
+            dist/**/*.AppImage
+            dist/**/*.exe
+            dist/**/*.dmg
+          generate_release_notes: true
+          body: |
+            EasyShow 0.2.x — 轻量级跨平台图片查看器
+
+            **两个变体**
+            - 完整版 full:含 HEIC/AVIF(运行时 libheif;Windows 包内附带 DLL 闭包)
+            - 轻量版 lite:不含 HEIC/AVIF 相关代码,零外部依赖
+
+            **支持格式**:JPEG / PNG / GIF / WebP / BMP / TIFF / ICO / TGA / PNM / QOI;完整版另支持 HEIC / AVIF
+            **功能**:目录树、缩略图网格(视口优先)、单图浏览、EXIF/GPS 信息面板、批量删除(回收站,默认只读)、幻灯片(整目录/所选批量)、深浅主题、中英双语
