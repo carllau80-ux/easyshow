@@ -138,11 +138,18 @@ make_zip "dist/windows/easyshow-$VERSION-windows-x86_64-full.zip" "$STAGE_FULL"
 make_zip "dist/windows/easyshow-$VERSION-windows-x86_64-lite.zip" "$STAGE_LITE"
 
 if [ -n "$MAKENSIS" ]; then
-    # makensis 是原生 Windows 程序:Git Bash 的 /d/... 路径它无法打开。
-    # 用 cygpath -m 转成"Windows 风格但保留正斜杠"的路径,避免混合分隔符
-    # 让 NSIS 的 File 命令解析异常。
+    # makensis 是原生 Windows 程序:Git Bash 的 /d/... 路径它无法打开。而且 NSIS 的
+    # File 命令用 FindFirstFile 匹配文件,该 API 不接受正斜杠——所以 SRC 必须传成
+    # 反斜杠路径且自带尾部反斜杠(NSI 里直接用 ${SRC}${文件名},不再拼接分隔符)。
     native_path() {
-        if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+        if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
+    }
+    native_dir() {
+        local p; p="$(native_path "$1")"
+        case "$p" in
+            */|*\\) printf '%s' "$p" ;;
+            *) if command -v cygpath >/dev/null 2>&1; then printf '%s\\' "$p"; else printf '%s/' "$p"; fi ;;
+        esac
     }
     echo ">> 载荷检查: full=$(ls "$STAGE_FULL" | wc -l) 个文件, exe=$([ -f "$STAGE_FULL/easyshow.exe" ] && echo 有 || echo 无); lite=$(ls "$STAGE_LITE" | wc -l) 个文件, exe=$([ -f "$STAGE_LITE/easyshow-lite.exe" ] && echo 有 || echo 无)"
     for variant in full lite; do
@@ -154,7 +161,8 @@ if [ -n "$MAKENSIS" ]; then
         "$MAKENSIS" -V2 -INPUTCHARSET UTF8 \
             -DVERSION="$VERSION" \
             -DVARIANT="$variant" \
-            -DSRC="$(native_path "$SRC")" \
+            -DSRC="$(native_dir "$SRC")" \
+            -DLICENSES="$(native_dir "$SRC/licenses")" \
             -DOUT="$(native_path "$OUT")" \
             -DICON="$(native_path "$ROOT/assets/icon.ico")" \
             "$(native_path "$ROOT/packaging/windows/easyshow.nsi")" | tail -3

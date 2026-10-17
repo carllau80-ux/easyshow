@@ -66,13 +66,13 @@ ShowUninstDetails show
 Section "${DISPLAY_NAME} 主程序 (必需)" SecMain
   SectionIn RO
   SetOutPath "$INSTDIR"
-  File "${SRC}/${PAYLOAD_EXE}"
-  File /nonfatal "${SRC}/README.md"
-  File /nonfatal "${SRC}/使用说明.txt"
-  File /nonfatal "${SRC}/LICENSE-MIT" "${SRC}/LICENSE-APACHE"
-  File /nonfatal /r "${SRC}/*.dll"
+  File "${SRC}${PAYLOAD_EXE}"
+  File /nonfatal "${SRC}README.md"
+  File /nonfatal "${SRC}使用说明.txt"
+  File /nonfatal "${SRC}LICENSE-MIT" "${SRC}LICENSE-APACHE"
+  File /nonfatal /r "${SRC}*.dll"
   SetOutPath "$INSTDIR\licenses"
-  File /nonfatal /r "${SRC}/licenses/*.*"
+  File /nonfatal /r "${LICENSES}*.*"
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
