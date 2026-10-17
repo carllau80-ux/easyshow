@@ -1,0 +1,5 @@
+# 跨平台构建脚本必须保持 LF,避免 Windows checkout(core.autocrlf)后 bash 无法执行
+*.sh text eol=lf
+*.nsi text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf

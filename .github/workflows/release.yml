@@ -66,7 +66,12 @@ jobs:
         env:
           MAKENSIS: /c/Program Files (x86)/NSIS/makensis.exe
           LIBS_DIR: build/win-dlls
-        run: bash packaging/windows/make-package.sh
+        run: |
+          if ! bash packaging/windows/make-package.sh > build-package.log 2>&1; then
+            while IFS= read -r line; do echo "::error::${line}"; done < <(tail -n 30 build-package.log)
+            exit 1
+          fi
+          tail -n 30 build-package.log
       - uses: actions/upload-artifact@v4
         with:
           name: easyshow-windows
@@ -82,7 +87,12 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       - name: Bundle + dmg (full + lite)
-        run: bash packaging/macos/make-bundle.sh universal both
+        run: |
+          if ! bash packaging/macos/make-bundle.sh universal both > build-bundle.log 2>&1; then
+            while IFS= read -r line; do echo "::error::${line}"; done < <(tail -n 30 build-bundle.log)
+            exit 1
+          fi
+          tail -n 30 build-bundle.log
       - uses: actions/upload-artifact@v4
         with:
           name: easyshow-macos

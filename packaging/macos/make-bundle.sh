@@ -12,12 +12,14 @@ WHICH="${2:-both}"
 
 build_bin() { # $1 = full|lite → 输出二进制路径
     local variant="$1"
-    local flags=()
-    [ "$variant" = "lite" ] && flags=(--no-default-features)
+    # 注意:macOS 自带 /bin/bash 3.2,空数组展开在 set -u 下会报 unbound,
+    # 因此这里用普通字符串而非数组传递 flag。
+    local extra=""
+    [ "$variant" = "lite" ] && extra="--no-default-features"
     if [ "$ARCH" = "universal" ]; then
         rustup target add aarch64-apple-darwin x86_64-apple-darwin
-        cargo build --release -j4 -p easyshow-app "${flags[@]}" --target aarch64-apple-darwin
-        cargo build --release -j4 -p easyshow-app "${flags[@]}" --target x86_64-apple-darwin
+        cargo build --release -j4 -p easyshow-app $extra --target aarch64-apple-darwin
+        cargo build --release -j4 -p easyshow-app $extra --target x86_64-apple-darwin
         mkdir -p target/universal/release
         lipo -create \
             target/aarch64-apple-darwin/release/easyshow \
@@ -25,7 +27,7 @@ build_bin() { # $1 = full|lite → 输出二进制路径
             -output "target/universal/release/easyshow-$variant"
         echo "target/universal/release/easyshow-$variant"
     else
-        cargo build --release -j4 -p easyshow-app "${flags[@]}" --target "$ARCH"
+        cargo build --release -j4 -p easyshow-app $extra --target "$ARCH"
         echo "target/$ARCH/release/easyshow"
     fi
 }
@@ -98,16 +100,18 @@ EOF
         brew list libheif >/dev/null 2>&1 || brew install libheif
         local heif_lib; heif_lib="$(brew --prefix libheif)/lib/libheif.1.dylib"
         cp "$heif_lib" "$app/Contents/Frameworks/" 2>/dev/null || true
-        # 复制 libheif 依赖的第三方 dylib
-        otool -L "$heif_lib" 2>/dev/null | awk 'NR>1 {print $1}' | grep -Ev "^/usr/lib|^/System" | while read -r dep; do
-            [ -f "$dep" ] && cp "$dep" "$app/Contents/Frameworks/" 2>/dev/null || true
-        done
+        # 复制 libheif 依赖的第三方 dylib(注意:无匹配时 grep 返回 1,pipefail 下需容错)
+        local deps
+        deps="$(otool -L "$heif_lib" 2>/dev/null | awk 'NR>1 {print $1}' | grep -Ev "^/usr/lib|^/System" || true)"
+        while read -r dep; do
+            [ -n "$dep" ] && [ -f "$dep" ] && cp "$dep" "$app/Contents/Frameworks/" 2>/dev/null || true
+        done <<< "$deps"
         # 统一 install_name 到 @executable_path/../Frameworks(与 easyshow 的 dlopen 候选路径一致)
         local f base dep
         for f in "$app/Contents/Frameworks"/*.dylib; do
             base="$(basename "$f")"
             install_name_tool -id "@executable_path/../Frameworks/$base" "$f" 2>/dev/null || true
-            for dep in $(otool -L "$f" | awk 'NR>1 {print $1}' | grep -E "libheif|libde265|libaom|libdav1d|libx265|libsharpyuv|libjpeg|libpng|libtiff|libwebp|libz|libbrotli|librsvg" ); do
+            for dep in $(otool -L "$f" | awk 'NR>1 {print $1}' | grep -E "libheif|libde265|libaom|libdav1d|libx265|libsharpyuv|libjpeg|libpng|libtiff|libwebp|libz|libbrotli|librsvg" || true); do
                 install_name_tool -change "$dep" "@executable_path/../Frameworks/$(basename "$dep")" "$f" 2>/dev/null || true
             done
         done

@@ -102,19 +102,40 @@ EasyShow 轻量版 使用说明
 EOF
 
 echo ">> 打包 zip…"
-python3 - "$VERSION" "$STAGE_FULL" "$STAGE_LITE" <<'PY'
+# 可移植 zip(zip → 7z → PowerShell → python3 → python),避免依赖单一工具
+make_zip() { # <out.zip> <待打包目录>
+    local out="$1" dir="$2"
+    local out_abs; out_abs="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
+    rm -f "$out"
+    if command -v zip >/dev/null 2>&1; then
+        (cd "$(dirname "$dir")" && zip -qr "$out_abs" "$(basename "$dir")")
+    elif command -v 7z >/dev/null 2>&1; then
+        (cd "$(dirname "$dir")" && 7z a -tzip "$out_abs" "$(basename "$dir")" >/dev/null)
+    elif command -v pwsh >/dev/null 2>&1 || command -v powershell >/dev/null 2>&1; then
+        local ps="powershell"
+        command -v pwsh >/dev/null 2>&1 && ps="pwsh"
+        "$ps" -NoProfile -Command "Compress-Archive -Path '$dir' -DestinationPath '$out_abs' -Force"
+    else
+        local py=""
+        command -v python3 >/dev/null 2>&1 && py="python3"
+        [ -z "$py" ] && command -v python >/dev/null 2>&1 && py="python"
+        [ -n "$py" ] || { echo "!! 没有可用的 zip 工具(zip/7z/powershell/python)"; return 1; }
+        "$py" - "$dir" "$out_abs" <<'PY'
 import os, sys, zipfile
-version, stage_full, stage_lite = sys.argv[1:4]
-for stage, tag in ((stage_full, "full"), (stage_lite, "lite")):
-    out = f"dist/windows/easyshow-{version}-windows-x86_64-{tag}.zip"
-    base = os.path.dirname(stage)
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-        for root, _, files in os.walk(stage):
-            for f in files:
-                p = os.path.join(root, f)
-                z.write(p, os.path.relpath(p, base))
-    print("zip:", out)
+stage, out = sys.argv[1], sys.argv[2]
+base = os.path.dirname(stage)
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+    for root, _, files in os.walk(stage):
+        for f in files:
+            p = os.path.join(root, f)
+            z.write(p, os.path.relpath(p, base))
 PY
+    fi
+    echo "zip: $out"
+}
+
+make_zip "dist/windows/easyshow-$VERSION-windows-x86_64-full.zip" "$STAGE_FULL"
+make_zip "dist/windows/easyshow-$VERSION-windows-x86_64-lite.zip" "$STAGE_LITE"
 
 if [ -n "$MAKENSIS" ]; then
     for variant in full lite; do
