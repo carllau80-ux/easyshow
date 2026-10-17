@@ -21,7 +21,7 @@ GitHub 的仓库创建必须在网页完成(SSH 只能推送,不能建仓):
 ## 之后的每次更新(版本号一起走)
 
 1. 改代码
-2. `packaging/bump-version.sh patch|minor|major`(版本号唯一来源:`Cargo.toml` 的 `[workspace.package]`,会进入安装包文件名、`--version`、设置菜单显示)
+2. `packaging/bump-version.sh`(不带参数=递增第三位 patch;重大改动用 minor / major)(版本号唯一来源:`Cargo.toml` 的 `[workspace.package]`,会进入安装包文件名、`--version`、设置菜单显示)
 3. `git add -A && git commit -m "…" && git tag v<新版本>`
 4. `git push && git push --tags`
 5. 两种出包方式任选:

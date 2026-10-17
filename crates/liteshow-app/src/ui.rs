@@ -60,6 +60,7 @@ pub fn toolbar(app: &mut LiteshowApp, ui: &mut egui::Ui) {
     let mut flip_sort_dir = false;
     let mut pick_lang: Option<Lang> = None;
     let mut pick_theme: Option<ThemeMode> = None;
+    let mut pick_interval: Option<u32> = None;
 
     ui.horizontal(|ui| {
         ui.add_space(6.0);
@@ -150,6 +151,21 @@ pub fn toolbar(app: &mut LiteshowApp, ui: &mut egui::Ui) {
                 ui.radio_value(&mut app.wheel_navigates, false, tr(lang, Key::WheelZoom));
                 ui.radio_value(&mut app.wheel_navigates, true, tr(lang, Key::WheelNavigate));
                 ui.separator();
+                ui.checkbox(&mut app.delete_enabled, tr(lang, Key::AllowDelete));
+                ui.separator();
+                ui.label(egui::RichText::new(tr(lang, Key::SlideshowInterval)).strong());
+                for secs in [3u32, 5, 10] {
+                    if ui
+                        .radio(
+                            app.slideshow_interval_secs == secs,
+                            format!("{secs} {}", tr(lang, Key::Seconds)),
+                        )
+                        .clicked()
+                    {
+                        pick_interval = Some(secs);
+                    }
+                }
+                ui.separator();
                 ui.weak(format!("Liteshow v{}", env!("CARGO_PKG_VERSION")));
             })
             .response
@@ -192,6 +208,25 @@ pub fn toolbar(app: &mut LiteshowApp, ui: &mut egui::Ui) {
             })
             .response
             .on_hover_text(tr(lang, Key::Sort));
+
+            // 幻灯片(整目录或所选批量)
+            let slide_on = app.is_slideshow();
+            if icon_toggle(ui, icons::SLIDESHOW, tr(lang, Key::Slideshow), slide_on).clicked() {
+                if slide_on {
+                    app.stop_slideshow();
+                } else {
+                    app.start_slideshow(ui.ctx());
+                }
+            }
+
+            // 删除(默认只读;未开启时禁用)
+            let has_target = (app.mode == Mode::Grid && !app.selection.is_empty())
+                || (app.mode == Mode::Viewer && app.current.is_some());
+            if icon_button(ui, icons::TRASH, tr(lang, Key::Delete), app.delete_enabled && has_target)
+                .clicked()
+            {
+                app.request_delete();
+            }
         });
     });
 
@@ -207,6 +242,9 @@ pub fn toolbar(app: &mut LiteshowApp, ui: &mut egui::Ui) {
     }
     if let Some(mode) = pick_theme {
         app.set_theme_mode(ui.ctx(), mode);
+    }
+    if let Some(secs) = pick_interval {
+        app.slideshow_interval_secs = secs;
     }
 }
 
@@ -321,10 +359,12 @@ pub fn grid(app: &mut LiteshowApp, ui: &mut egui::Ui) {
     let rows = app.entries.len().div_ceil(cols);
     let row_h = TILE_H + TILE_GAP;
 
-    let mut select_idx: Option<usize> = None;
+    let mut select_idx: Option<(usize, bool, bool)> = None;
     let mut open_idx: Option<usize> = None;
     let mut to_request: Vec<std::path::PathBuf> = Vec::new();
     let mut to_upload: Vec<std::path::PathBuf> = Vec::new();
+    let mut wanted: Vec<std::path::PathBuf> = Vec::new();
+    let (ctrl, shift) = ui.input(|i| (i.modifiers.ctrl || i.modifiers.command, i.modifiers.shift));
     let palette = Palette::for_ui(ui);
     let (card_bg, thumb_bg, text_dim, accent) = (palette.card_bg, palette.thumb_bg, palette.text_dim, palette.accent);
 
@@ -332,6 +372,22 @@ pub fn grid(app: &mut LiteshowApp, ui: &mut egui::Ui) {
         .auto_shrink(false)
         .show_rows(ui, row_h, rows, |ui, row_range| {
             ui.spacing_mut().item_spacing = egui::vec2(TILE_GAP, TILE_GAP);
+            // 视口优先:可见区上下各 2 行也标记为"应优先解析",
+            // 缩略图线程会跳过被滚动甩出的排队项 —— 拖到哪里就解析哪里。
+            const PRELOAD_ROWS: usize = 2;
+            let margin_start = row_range.start.saturating_sub(PRELOAD_ROWS);
+            let margin_end = (row_range.end + PRELOAD_ROWS).min(rows);
+            for row in margin_start..margin_end {
+                for col in 0..cols {
+                    let idx = row * cols + col;
+                    let Some(entry) = app.entries.get(idx) else { break };
+                    let path = entry.path.clone();
+                    wanted.push(path.clone());
+                    if !app.thumb_imgs.contains_key(&path) {
+                        to_request.push(path);
+                    }
+                }
+            }
             for row in row_range {
                 ui.horizontal(|ui| {
                     for col in 0..cols {
@@ -363,29 +419,38 @@ pub fn grid(app: &mut LiteshowApp, ui: &mut egui::Ui) {
                             egui::FontId::proportional(11.5),
                             text_dim,
                         );
-                        if idx == app.selected {
+                        let primary = app.nav_order.get(app.selected).copied() == Some(idx);
+                        if primary {
                             painter.rect_stroke(
                                 rect,
                                 egui::CornerRadius::same(8),
                                 egui::Stroke::new(2.0, accent),
                                 egui::StrokeKind::Inside,
                             );
+                        } else if app.selection.contains(&idx) {
+                            painter.rect_stroke(
+                                rect,
+                                egui::CornerRadius::same(8),
+                                egui::Stroke::new(1.5, accent.gamma_multiply(0.6)),
+                                egui::StrokeKind::Inside,
+                            );
                         }
                         if response.double_clicked() {
                             open_idx = Some(idx);
                         } else if response.clicked() {
-                            select_idx = Some(idx);
+                            select_idx = Some((idx, ctrl, shift));
                         }
                     }
                 });
             }
         });
 
-    if let Some(idx) = select_idx {
-        app.select(idx);
+    app.set_visible_thumbs(wanted);
+    if let Some((idx, ctrl, shift)) = select_idx {
+        app.select_with(idx, ctrl, shift);
     }
     if let Some(idx) = open_idx {
-        app.select(idx);
+        app.select_with(idx, false, false);
         app.open_selected_in_viewer(ui.ctx());
     }
     for path in to_upload {
@@ -585,7 +650,10 @@ pub fn status(app: &mut LiteshowApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         if let Some(info) = &app.info {
             ui.label(file_name(&info.path));
-            ui.weak(format!("{} / {}", app.selected + 1, app.entries.len()));
+            ui.weak(format!("{} / {}", app.selected + 1, app.nav_order.len()));
+            if app.selection.len() > 1 {
+                ui.weak(tr(lang, Key::SelectedCount).replace("{n}", &app.selection.len().to_string()));
+            }
             if let Some((w, h)) = info.dims {
                 ui.weak(format!("{w} × {h}"));
             }
@@ -612,6 +680,53 @@ pub fn status(app: &mut LiteshowApp, ui: &mut egui::Ui) {
             } else {
                 ui.weak(tr(lang, Key::GridHint));
             }
+            if app.is_slideshow() {
+                ui.weak(format!("▶ {}", tr(lang, Key::Slideshow)));
+            }
         });
     });
+}
+
+// ----------------------------------------------------------------------
+// 删除确认(模态)
+// ----------------------------------------------------------------------
+
+pub fn delete_modal(app: &mut LiteshowApp, ctx: &egui::Context) {
+    let Some(paths) = app.pending_delete.clone() else { return };
+    let lang = app.lang;
+    let mut cancel = false;
+    let mut confirm = false;
+    egui::Window::new(tr(lang, Key::DeleteConfirmTitle))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.set_min_width(340.0);
+            ui.label(tr(lang, Key::DeleteConfirmBody).replace("{n}", &paths.len().to_string()));
+            ui.add_space(6.0);
+            for path in paths.iter().take(5) {
+                ui.weak(file_name(path));
+            }
+            if paths.len() > 5 {
+                ui.weak(format!("… +{}", paths.len() - 5));
+            }
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button(tr(lang, Key::Cancel)).clicked() {
+                    cancel = true;
+                }
+                let destructive = egui::Button::new(
+                    egui::RichText::new(tr(lang, Key::ConfirmDelete)).color(egui::Color32::WHITE),
+                )
+                .fill(egui::Color32::from_rgb(0xc9, 0x45, 0x3f));
+                if ui.add(destructive).clicked() {
+                    confirm = true;
+                }
+            });
+        });
+    if cancel {
+        app.cancel_delete();
+    } else if confirm {
+        app.confirm_delete(ctx);
+    }
 }

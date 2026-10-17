@@ -9,10 +9,14 @@ use crate::icons;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(not(windows), allow(dead_code))] // ThisPc/Drive/Glyph 仅在 Windows 组装树时构造
 pub enum NodeIcon {
+    /// Windows 上全部节点都用系统原生图标,不会构造字形变体。
+    #[cfg_attr(windows, allow(dead_code))]
     Glyph(&'static str),
     ThisPc,
     Drive(char),
     Folder,
+    /// Windows 已知文件夹(0=桌面 1=下载 2=图片 3=文档),使用系统专用图标。
+    KnownFolder(u8),
 }
 
 impl NodeIcon {
@@ -22,7 +26,7 @@ impl NodeIcon {
             NodeIcon::Glyph(g) => g,
             NodeIcon::ThisPc => icons::DESKTOP,
             NodeIcon::Drive(_) => icons::HARD_DRIVE,
-            NodeIcon::Folder => icons::FOLDER,
+            NodeIcon::Folder | NodeIcon::KnownFolder(_) => icons::FOLDER,
         }
     }
 }

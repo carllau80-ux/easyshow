@@ -17,6 +17,7 @@ crossbeam-channel = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 libc = "0.2"
+trash = { workspace = true }
 # rfd: 只用 xdg-portal 后端(纯 Rust/D-Bus);默认特性会拉入系统 wayland-client,需开发包
 rfd = { workspace = true }
 
@@ -30,7 +31,9 @@ winresource = "0.1"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
     "Win32_Storage_FileSystem",
+    "Win32_System_Com",
 ] }

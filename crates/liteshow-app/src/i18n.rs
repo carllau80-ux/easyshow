@@ -90,6 +90,17 @@ pub enum Key {
     FolderDocuments,
     #[cfg_attr(not(windows), allow(dead_code))]
     LocalDisk,
+    // 删除 / 幻灯片
+    Delete,
+    DeleteConfirmTitle,
+    DeleteConfirmBody,
+    ConfirmDelete,
+    Cancel,
+    AllowDelete,
+    SelectedCount,
+    Slideshow,
+    SlideshowInterval,
+    Seconds,
 }
 
 pub fn tr(lang: Lang, key: Key) -> &'static str {
@@ -152,6 +163,16 @@ pub fn tr(lang: Lang, key: Key) -> &'static str {
         (Lang::Zh, FolderPictures) => "图片",
         (Lang::Zh, FolderDocuments) => "文档",
         (Lang::Zh, LocalDisk) => "本地磁盘",
+        (Lang::Zh, Delete) => "删除",
+        (Lang::Zh, DeleteConfirmTitle) => "确认删除",
+        (Lang::Zh, DeleteConfirmBody) => "将把 {n} 个文件移入回收站,可在系统回收站中恢复。",
+        (Lang::Zh, ConfirmDelete) => "移入回收站",
+        (Lang::Zh, Cancel) => "取消",
+        (Lang::Zh, AllowDelete) => "允许删除(默认只读)",
+        (Lang::Zh, SelectedCount) => "已选 {n} 张",
+        (Lang::Zh, Slideshow) => "幻灯片",
+        (Lang::Zh, SlideshowInterval) => "幻灯片间隔",
+        (Lang::Zh, Seconds) => "秒",
 
         (Lang::En, Open) => "Open Image…",
         (Lang::En, OpenFolder) => "Open Folder",
@@ -210,5 +231,15 @@ pub fn tr(lang: Lang, key: Key) -> &'static str {
         (Lang::En, FolderPictures) => "Pictures",
         (Lang::En, FolderDocuments) => "Documents",
         (Lang::En, LocalDisk) => "Local Disk",
+        (Lang::En, Delete) => "Delete",
+        (Lang::En, DeleteConfirmTitle) => "Confirm deletion",
+        (Lang::En, DeleteConfirmBody) => "Move {n} file(s) to the recycle bin? They can be restored from there.",
+        (Lang::En, ConfirmDelete) => "Move to Trash",
+        (Lang::En, Cancel) => "Cancel",
+        (Lang::En, AllowDelete) => "Allow deleting (read-only by default)",
+        (Lang::En, SelectedCount) => "{n} selected",
+        (Lang::En, Slideshow) => "Slideshow",
+        (Lang::En, SlideshowInterval) => "Slideshow interval",
+        (Lang::En, Seconds) => "s",
     }
 }

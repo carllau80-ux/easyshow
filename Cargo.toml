@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/liteshow-core", "crates/liteshow-app"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -28,6 +28,7 @@ eframe = { version = "0.37", default-features = false, features = [
 clap = { version = "4", features = ["derive"] }
 crossbeam-channel = "0.5"
 env_logger = "0.11"
+trash = "5"
 # rfd: 只用 xdg-portal 后端(纯 Rust/D-Bus);默认特性会拉入系统 wayland-client,需开发包
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 

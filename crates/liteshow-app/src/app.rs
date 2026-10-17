@@ -3,7 +3,7 @@
 //! Two modes: a thumbnail **grid** for the selected directory, and a single
 //! image **viewer**. A directory tree on the left, file/EXIF info on the right.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -45,6 +45,11 @@ pub struct InfoData {
     pub exif: Option<ExifSummary>,
 }
 
+/// 幻灯片状态:下一次自动翻页的时间(egui 秒)。
+pub struct SlideshowState {
+    next_at: f64,
+}
+
 pub struct LiteshowApp {
     pub lang: Lang,
     // --- directory tree ---
@@ -52,7 +57,13 @@ pub struct LiteshowApp {
     pub current_dir: PathBuf,
     // --- listing / grid ---
     pub entries: Vec<ImageEntry>,
+    /// 导航顺序:目录浏览时为恒等序列;幻灯片(所选批量)时为其子集(存 entries 索引)。
+    pub nav_order: Vec<usize>,
+    /// nav_order 中的位置。
     pub selected: usize,
+    /// 多选集合(entries 索引;网格批量操作/幻灯片选片用)。
+    pub selection: BTreeSet<usize>,
+    selection_anchor: usize,
     pub mode: Mode,
     pub grid_cols: usize,
     pub sort_key: SortKey,
@@ -82,8 +93,15 @@ pub struct LiteshowApp {
     thumb_order: VecDeque<PathBuf>,
     thumb_inflight: HashSet<PathBuf>,
     thumb_generation: u64,
+    last_thumb_wanted: Vec<PathBuf>,
     // --- info panel ---
     pub info: Option<InfoData>,
+    // --- 删除(默认只读) ---
+    pub delete_enabled: bool,
+    pub pending_delete: Option<Vec<PathBuf>>,
+    // --- 幻灯片 ---
+    pub slideshow: Option<SlideshowState>,
+    pub slideshow_interval_secs: u32,
     // --- ui ---
     pub canvas_size: egui::Vec2,
     pub fullscreen: bool,
@@ -110,20 +128,23 @@ fn build_tree_root(lang: Lang, home: &Path) -> TreeNode {
             true,
             true,
         );
-        // 常用位置(资源管理器"快速访问"的等价物)
+        // 常用位置(资源管理器"快速访问"的等价物;使用系统专用图标)
         let profile = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default();
-        for (key, folder) in [
+        for (index, (key, folder)) in [
             (Key::FolderDesktop, "Desktop"),
             (Key::FolderDownloads, "Downloads"),
             (Key::FolderPictures, "Pictures"),
             (Key::FolderDocuments, "Documents"),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let path = profile.join(folder);
             if path.is_dir() {
                 root.children.push(TreeNode::new_branch(
                     tr(lang, key).to_string(),
                     path,
-                    NodeIcon::Folder,
+                    NodeIcon::KnownFolder(index as u8),
                     false,
                     false,
                 ));
@@ -200,6 +221,7 @@ fn volume_label(letter: char) -> Option<String> {
         Some(String::from_utf16_lossy(&buf[..len]))
     }
 }
+
 /// 用户主目录:HOME → USERPROFILE → 平台兜底。
 fn home_dir() -> PathBuf {
     for key in ["HOME", "USERPROFILE"] {
@@ -246,7 +268,10 @@ impl LiteshowApp {
             tree_root: build_tree_root(lang, &home),
             current_dir: home.clone(),
             entries: Vec::new(),
+            nav_order: Vec::new(),
             selected: 0,
+            selection: BTreeSet::new(),
+            selection_anchor: 0,
             mode: Mode::Grid,
             grid_cols: 4,
             sort_key: SortKey::Name,
@@ -270,7 +295,12 @@ impl LiteshowApp {
             thumb_order: VecDeque::new(),
             thumb_inflight: HashSet::new(),
             thumb_generation: 0,
+            last_thumb_wanted: Vec::new(),
             info: None,
+            delete_enabled: false,
+            pending_delete: None,
+            slideshow: None,
+            slideshow_interval_secs: 5,
             canvas_size: egui::vec2(1000.0, 700.0),
             fullscreen: false,
             show_tree: true,
@@ -312,12 +342,19 @@ impl LiteshowApp {
         self.current_dir = dir.clone();
         self.entries = scan_entries(&dir);
         sort_entries(&mut self.entries, self.sort_key, self.sort_asc);
+        self.nav_order = (0..self.entries.len()).collect();
         self.selected = select
             .and_then(|sel| self.entries.iter().position(|e| e.path == sel))
             .unwrap_or(0);
         if self.selected >= self.entries.len() {
             self.selected = 0;
         }
+        self.selection.clear();
+        if !self.entries.is_empty() {
+            self.selection.insert(self.selected);
+        }
+        self.selection_anchor = self.selected;
+        self.slideshow = None;
         self.thumb_generation += 1;
         self.thumb_inflight.clear();
         self.mode = mode;
@@ -325,7 +362,7 @@ impl LiteshowApp {
         self.tree_root.expand_to(&dir);
         self.refresh_info();
         let title = self
-            .selected_path()
+            .current_path()
             .map(|p| file_name(p))
             .unwrap_or_else(|| file_name(&dir));
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{title} — Liteshow")));
@@ -340,28 +377,193 @@ impl LiteshowApp {
         if self.entries.is_empty() {
             return;
         }
+        self.ensure_identity_order();
         self.mode = Mode::Viewer;
         self.load_current(ctx);
     }
 
     pub fn exit_to_grid(&mut self) {
+        let entry = self.entry_index();
+        self.nav_order = (0..self.entries.len()).collect();
+        if let Some(entry) = entry {
+            self.selected = entry;
+            self.selection.clear();
+            self.selection.insert(entry);
+            self.selection_anchor = entry;
+        }
         self.mode = Mode::Grid;
+        self.slideshow = None;
         self.refresh_info();
     }
 
-    pub fn select(&mut self, index: usize) {
-        if index < self.entries.len() {
-            self.selected = index;
-            self.refresh_info();
+    /// 结束幻灯片(保留当前导航顺序;点选网格或切换目录会回到整目录顺序)。
+    pub fn stop_slideshow(&mut self) {
+        self.slideshow = None;
+    }
+
+    pub fn is_slideshow(&self) -> bool {
+        self.slideshow.is_some()
+    }
+
+    /// 开始幻灯片:有批量选择(≥2)时播放所选,否则播放整个目录。
+    pub fn start_slideshow(&mut self, ctx: &egui::Context) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let subset: Vec<usize> = if self.selection.len() >= 2 {
+            self.selection.iter().copied().collect()
+        } else {
+            (0..self.entries.len()).collect()
+        };
+        self.nav_order = subset;
+        self.selected = 0;
+        let now = ctx.input(|i| i.time);
+        self.slideshow = Some(SlideshowState {
+            next_at: now + self.slideshow_interval_secs.max(1) as f64,
+        });
+        self.mode = Mode::Viewer;
+        self.load_current(ctx);
+    }
+
+    fn tick_slideshow(&mut self, ctx: &egui::Context) {
+        let Some(state) = &self.slideshow else { return };
+        let now = ctx.input(|i| i.time);
+        let interval = self.slideshow_interval_secs.max(1) as f64;
+        if now >= state.next_at {
+            self.advance(ctx, 1);
+            if let Some(state) = &mut self.slideshow {
+                state.next_at = now + interval;
+            }
+        }
+        let remaining = self
+            .slideshow
+            .as_ref()
+            .map(|s| (s.next_at - now).max(0.05))
+            .unwrap_or(0.05);
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+    }
+
+    /// entries 中的索引(nav_order[selected])。
+    pub fn entry_index(&self) -> Option<usize> {
+        self.nav_order.get(self.selected).copied()
+    }
+
+    pub fn current_path(&self) -> Option<&PathBuf> {
+        self.entry_index().and_then(|i| self.entries.get(i)).map(|e| &e.path)
+    }
+
+    /// 位置 → 路径(path_at 的 nav_order 版本)。
+    fn path_at_pos(&self, position: usize) -> Option<PathBuf> {
+        self.nav_order
+            .get(position)
+            .and_then(|i| self.entries.get(*i))
+            .map(|e| e.path.clone())
+    }
+
+    /// 网格(整目录)语义下重建恒等导航顺序。
+    fn ensure_identity_order(&mut self) {
+        if self.nav_order.len() != self.entries.len() {
+            self.nav_order = (0..self.entries.len()).collect();
         }
     }
 
-    pub fn selected_path(&self) -> Option<&PathBuf> {
-        self.entries.get(self.selected).map(|e| &e.path)
+    // ------------------------------------------------------------------
+    // Selection (grid, multi-select for batch ops & slideshow)
+    // ------------------------------------------------------------------
+
+    /// 单击选择(清空多选)。
+    pub fn select(&mut self, index: usize) {
+        self.select_with(index, false, false);
     }
 
-    fn path_at(&self, index: usize) -> Option<PathBuf> {
-        self.entries.get(index).map(|e| e.path.clone())
+    /// 带修饰键的选择:Ctrl/Cmd 切换、Shift 范围。
+    pub fn select_with(&mut self, index: usize, ctrl: bool, shift: bool) {
+        if index >= self.entries.len() {
+            return;
+        }
+        self.ensure_identity_order();
+        self.slideshow = None;
+        if shift {
+            let (start, end) = if self.selection_anchor <= index {
+                (self.selection_anchor, index)
+            } else {
+                (index, self.selection_anchor)
+            };
+            self.selection.clear();
+            for i in start..=end {
+                self.selection.insert(i);
+            }
+        } else if ctrl {
+            if !self.selection.remove(&index) {
+                self.selection.insert(index);
+            }
+            self.selection_anchor = index;
+        } else {
+            self.selection.clear();
+            self.selection.insert(index);
+            self.selection_anchor = index;
+        }
+        self.selected = index;
+        self.refresh_info();
+    }
+
+    pub fn select_all(&mut self) {
+        self.ensure_identity_order();
+        self.slideshow = None;
+        self.selection = (0..self.entries.len()).collect();
+        self.refresh_info();
+    }
+
+    fn select_relative(&mut self, delta: isize) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let n = self.entries.len() as isize;
+        let next = (self.selected as isize + delta).clamp(0, n - 1);
+        self.select(next as usize);
+    }
+
+    // ------------------------------------------------------------------
+    // Delete (read-only by default; batch + confirmation)
+    // ------------------------------------------------------------------
+
+    /// 请求删除当前选择(网格:多选;浏览:当前图)。需先开启"允许删除"。
+    pub fn request_delete(&mut self) {
+        if !self.delete_enabled {
+            return;
+        }
+        let paths: Vec<PathBuf> = match self.mode {
+            Mode::Grid if !self.selection.is_empty() => self
+                .selection
+                .iter()
+                .filter_map(|i| self.entries.get(*i))
+                .map(|e| e.path.clone())
+                .collect(),
+            Mode::Viewer => self.current_path().cloned().into_iter().collect(),
+            _ => Vec::new(),
+        };
+        if !paths.is_empty() {
+            self.pending_delete = Some(paths);
+        }
+    }
+
+    pub fn cancel_delete(&mut self) {
+        self.pending_delete = None;
+    }
+
+    /// 确认后执行:移入系统回收站(可恢复),随后重新扫描当前目录。
+    pub fn confirm_delete(&mut self, ctx: &egui::Context) {
+        let Some(paths) = self.pending_delete.take() else { return };
+        if paths.is_empty() {
+            return;
+        }
+        if let Err(err) = trash::delete_all(&paths) {
+            self.error = Some(format!("{}: {err}", tr(self.lang, Key::Delete)));
+            return;
+        }
+        let dir = self.current_dir.clone();
+        self.open_dir(ctx, dir, None, Mode::Grid);
+        self.selection.clear();
     }
 
     // ------------------------------------------------------------------
@@ -384,6 +586,23 @@ impl LiteshowApp {
         self.apply_sort_keep_selection();
     }
 
+    fn apply_sort_keep_selection(&mut self) {
+        let keep = self.current_path().cloned();
+        sort_entries(&mut self.entries, self.sort_key, self.sort_asc);
+        self.nav_order = (0..self.entries.len()).collect();
+        self.slideshow = None;
+        if let Some(path) = keep {
+            if let Some(position) = self.entries.iter().position(|e| e.path == path) {
+                self.selected = position;
+            }
+        }
+        self.selection.clear();
+        if !self.entries.is_empty() {
+            self.selection.insert(self.selected);
+        }
+        self.refresh_info();
+    }
+
     // ------------------------------------------------------------------
     // Theme / language
     // ------------------------------------------------------------------
@@ -400,23 +619,12 @@ impl LiteshowApp {
         }
     }
 
-    fn apply_sort_keep_selection(&mut self) {
-        let keep = self.selected_path().cloned();
-        sort_entries(&mut self.entries, self.sort_key, self.sort_asc);
-        if let Some(path) = keep {
-            if let Some(position) = self.entries.iter().position(|e| e.path == path) {
-                self.selected = position;
-            }
-        }
-        self.refresh_info();
-    }
-
     pub fn load_current(&mut self, ctx: &egui::Context) {
-        if self.entries.is_empty() {
+        if self.nav_order.is_empty() {
             return;
         }
-        self.selected = self.selected.min(self.entries.len() - 1);
-        let Some(path) = self.path_at(self.selected) else { return };
+        self.selected = self.selected.min(self.nav_order.len() - 1);
+        let Some(path) = self.path_at_pos(self.selected) else { return };
         self.refresh_info();
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{} — Liteshow", file_name(&path))));
 
@@ -447,32 +655,38 @@ impl LiteshowApp {
         self.prefetch_neighbors(ctx);
     }
 
-    pub fn next(&mut self, ctx: &egui::Context) {
-        if self.entries.is_empty() {
+    /// 在导航顺序内移动(幻灯片/手动共用)。
+    fn advance(&mut self, ctx: &egui::Context, delta: isize) {
+        let n = self.nav_order.len();
+        if n == 0 {
             return;
         }
-        self.selected = (self.selected + 1) % self.entries.len();
+        self.selected = ((self.selected as isize + delta).rem_euclid(n as isize)) as usize;
         if self.mode == Mode::Viewer {
             self.load_current(ctx);
         } else {
             self.refresh_info();
         }
+    }
+
+    fn bump_slideshow_deadline(&mut self, ctx: &egui::Context) {
+        if let Some(state) = &mut self.slideshow {
+            state.next_at = ctx.input(|i| i.time) + self.slideshow_interval_secs.max(1) as f64;
+        }
+    }
+
+    pub fn next(&mut self, ctx: &egui::Context) {
+        self.advance(ctx, 1);
+        self.bump_slideshow_deadline(ctx);
     }
 
     pub fn prev(&mut self, ctx: &egui::Context) {
-        if self.entries.is_empty() {
-            return;
-        }
-        self.selected = (self.selected + self.entries.len() - 1) % self.entries.len();
-        if self.mode == Mode::Viewer {
-            self.load_current(ctx);
-        } else {
-            self.refresh_info();
-        }
+        self.advance(ctx, -1);
+        self.bump_slideshow_deadline(ctx);
     }
 
     pub fn first(&mut self, ctx: &egui::Context) {
-        if self.entries.is_empty() {
+        if self.nav_order.is_empty() {
             return;
         }
         self.selected = 0;
@@ -481,18 +695,20 @@ impl LiteshowApp {
         } else {
             self.refresh_info();
         }
+        self.bump_slideshow_deadline(ctx);
     }
 
     pub fn last(&mut self, ctx: &egui::Context) {
-        if self.entries.is_empty() {
+        if self.nav_order.is_empty() {
             return;
         }
-        self.selected = self.entries.len() - 1;
+        self.selected = self.nav_order.len() - 1;
         if self.mode == Mode::Viewer {
             self.load_current(ctx);
         } else {
             self.refresh_info();
         }
+        self.bump_slideshow_deadline(ctx);
     }
 
     // ------------------------------------------------------------------
@@ -583,14 +799,14 @@ impl LiteshowApp {
 
     /// Decode the previous/next images ahead of time for instant navigation.
     fn prefetch_neighbors(&mut self, ctx: &egui::Context) {
-        let n = self.entries.len();
+        let n = self.nav_order.len();
         if n < 2 {
             return;
         }
         let cap = self.decode_cap(ctx);
-        let current = self.path_at(self.selected);
+        let current = self.path_at_pos(self.selected);
         for delta in [1usize, n - 1] {
-            let Some(path) = self.path_at((self.selected + delta) % n) else { continue };
+            let Some(path) = self.path_at_pos((self.selected + delta) % n) else { continue };
             if Some(&path) == current.as_ref() || self.prefetch.contains_key(&path) {
                 continue;
             }
@@ -603,7 +819,7 @@ impl LiteshowApp {
     // ------------------------------------------------------------------
 
     fn refresh_info(&mut self) {
-        let Some(path) = self.path_at(self.selected) else {
+        let Some(path) = self.current_path().cloned() else {
             self.info = None;
             return;
         };
@@ -700,28 +916,43 @@ impl LiteshowApp {
         self.thumbs.request(path.to_path_buf(), self.thumb_generation);
     }
 
+    /// 汇报当前视口(含预载边距)内的图片集合;变化时同步给缩略图线程。
+    pub fn set_visible_thumbs(&mut self, paths: Vec<PathBuf>) {
+        if self.last_thumb_wanted == paths {
+            return;
+        }
+        self.last_thumb_wanted = paths.clone();
+        self.thumbs.set_wanted(paths);
+    }
+
     fn handle_keys(&mut self, ctx: &egui::Context) {
         use egui::Key;
-        let (right, left, up, down, home, end, enter, escape, zoom_in, zoom_out, fit_key, actual_key, rotate_key, flip_key, full_key) =
-            ctx.input(|i| {
-                (
-                    i.key_pressed(Key::ArrowRight),
-                    i.key_pressed(Key::ArrowLeft),
-                    i.key_pressed(Key::ArrowUp),
-                    i.key_pressed(Key::ArrowDown),
-                    i.key_pressed(Key::Home),
-                    i.key_pressed(Key::End),
-                    i.key_pressed(Key::Enter),
-                    i.key_pressed(Key::Escape),
-                    i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals),
-                    i.key_pressed(Key::Minus),
-                    i.key_pressed(Key::Num0),
-                    i.key_pressed(Key::Num1),
-                    i.key_pressed(Key::R),
-                    i.key_pressed(Key::F),
-                    i.key_pressed(Key::F11),
-                )
-            });
+        let (
+            right, left, up, down, home, end, enter, escape, space, delete_key, select_all,
+            zoom_in, zoom_out, fit_key, actual_key, rotate_key, flip_key, full_key,
+        ) = ctx.input(|i| {
+            let command = i.modifiers.ctrl || i.modifiers.command;
+            (
+                i.key_pressed(Key::ArrowRight),
+                i.key_pressed(Key::ArrowLeft),
+                i.key_pressed(Key::ArrowUp),
+                i.key_pressed(Key::ArrowDown),
+                i.key_pressed(Key::Home),
+                i.key_pressed(Key::End),
+                i.key_pressed(Key::Enter),
+                i.key_pressed(Key::Escape),
+                i.key_pressed(Key::Space),
+                i.key_pressed(Key::Delete),
+                command && i.key_pressed(Key::A),
+                i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals),
+                i.key_pressed(Key::Minus),
+                i.key_pressed(Key::Num0),
+                i.key_pressed(Key::Num1),
+                i.key_pressed(Key::R),
+                i.key_pressed(Key::F),
+                i.key_pressed(Key::F11),
+            )
+        });
 
         match self.mode {
             Mode::Grid => {
@@ -744,6 +975,12 @@ impl LiteshowApp {
                 if end {
                     self.select(self.entries.len().saturating_sub(1));
                 }
+                if select_all {
+                    self.select_all();
+                }
+                if delete_key {
+                    self.request_delete();
+                }
                 if enter {
                     self.open_selected_in_viewer(ctx);
                 }
@@ -760,6 +997,16 @@ impl LiteshowApp {
                 }
                 if end {
                     self.last(ctx);
+                }
+                if space {
+                    if self.is_slideshow() {
+                        self.stop_slideshow();
+                    } else {
+                        self.start_slideshow(ctx);
+                    }
+                }
+                if delete_key {
+                    self.request_delete();
                 }
                 if zoom_in {
                     self.zoom_step(1.15);
@@ -826,15 +1073,6 @@ impl LiteshowApp {
             }
         }
     }
-
-    fn select_relative(&mut self, delta: isize) {
-        if self.entries.is_empty() {
-            return;
-        }
-        let n = self.entries.len() as isize;
-        let next = (self.selected as isize + delta).clamp(0, n - 1);
-        self.select(next as usize);
-    }
 }
 
 impl eframe::App for LiteshowApp {
@@ -865,6 +1103,7 @@ impl eframe::App for LiteshowApp {
         self.poll_decode(&ctx);
         self.poll_thumbs();
         self.handle_keys(&ctx);
+        self.tick_slideshow(&ctx);
 
         // 滚轮输入:在本帧、面板消费事件之前读取;由画布(悬停时)取用。
         // 单位归一化:Line=1 格;Page=±1 格;Point(触控板等高精度)按 50px 折 1 格。
@@ -881,6 +1120,11 @@ impl eframe::App for LiteshowApp {
             }
             units
         });
+
+        // 浏览模式下没有网格:清空缩略图可见集,避免后台继续解析
+        if self.mode == Mode::Viewer {
+            self.set_visible_thumbs(Vec::new());
+        }
 
         egui::Panel::top("liteshow-toolbar").show(ui, |ui| crate::ui::toolbar(self, ui));
         egui::Panel::bottom("liteshow-status").show(ui, |ui| crate::ui::status(self, ui));
@@ -902,6 +1146,9 @@ impl eframe::App for LiteshowApp {
             Mode::Grid => crate::ui::grid(self, ui),
             Mode::Viewer => crate::ui::canvas(self, ui),
         });
+
+        // 删除二次确认(模态)
+        crate::ui::delete_modal(self, &ctx);
 
         // eframe is event-driven: keep frames coming while work is in flight.
         if self.loading || !self.thumb_inflight.is_empty() {

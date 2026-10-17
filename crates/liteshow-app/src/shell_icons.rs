@@ -1,7 +1,8 @@
 //! Windows 资源管理器**原生图标**。
 //!
-//! 用 `SHGetFileInfoW` 从 shell 提取「此电脑 / 每个盘符 / 普通文件夹」的系统图标
-//! (与资源管理器显示的一致),转换成 egui 纹理供目录树绘制。
+//! 用 `SHGetFileInfoW` 从 shell 提取「此电脑 / 每个盘符 / 已知文件夹(桌面、下载、
+//! 图片、文档,使用系统专用图标)/ 普通文件夹」的系统图标(与资源管理器一致),
+//! 转换成 egui 纹理供目录树绘制。
 //! 非 Windows 平台为空实现,目录树回退到图标字体的字形图标。
 
 use eframe::egui;
@@ -13,6 +14,8 @@ pub struct ShellIcons {
     this_pc: Option<egui::TextureHandle>,
     folder: Option<egui::TextureHandle>,
     drives: std::collections::HashMap<char, egui::TextureHandle>,
+    /// 0=桌面 1=下载 2=图片 3=文档
+    known: [Option<egui::TextureHandle>; 4],
 }
 
 impl ShellIcons {
@@ -21,6 +24,7 @@ impl ShellIcons {
             NodeIcon::ThisPc => self.this_pc.as_ref(),
             NodeIcon::Folder => self.folder.as_ref(),
             NodeIcon::Drive(letter) => self.drives.get(&letter),
+            NodeIcon::KnownFolder(index) => self.known.get(index as usize).and_then(|t| t.as_ref()),
             NodeIcon::Glyph(_) => None,
         }
     }
@@ -40,10 +44,35 @@ fn load_impl(_ctx: &egui::Context) -> Option<ShellIcons> {
 fn load_impl(ctx: &egui::Context) -> Option<ShellIcons> {
     use std::path::PathBuf;
 
+    // shell 图标查询需要 COM(未初始化时部分项会静默失败);失败码可忽略
+    unsafe {
+        windows_sys::Win32::System::Com::CoInitializeEx(
+            std::ptr::null(),
+            windows_sys::Win32::System::Com::COINIT_APARTMENTTHREADED as u32,
+        );
+    }
+
     let mut icons = ShellIcons::default();
 
     // 「此电脑」(CLSID)
-    icons.this_pc = icon_for_path(ctx, "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}");
+    icons.this_pc = icon_for_string(ctx, "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}");
+
+    // 已知文件夹(桌面/下载/图片/文档):用 shell 命名空间 PIDL,
+    // 得到与资源管理器一致的**专用**图标(而不是普通文件夹图标)。
+    {
+        use windows_sys::Win32::UI::Shell::{
+            FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Pictures,
+        };
+        let ids = [
+            &FOLDERID_Desktop,
+            &FOLDERID_Downloads,
+            &FOLDERID_Pictures,
+            &FOLDERID_Documents,
+        ];
+        for (index, id) in ids.iter().enumerate() {
+            icons.known[index] = icon_for_known_folder(ctx, id);
+        }
+    }
 
     // 普通文件夹图标:用用户主目录里的任意普通目录提取
     let home = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default();
@@ -51,7 +80,7 @@ fn load_impl(ctx: &egui::Context) -> Option<ShellIcons> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                icons.folder = icon_for_path(ctx, &path.to_string_lossy());
+                icons.folder = icon_for_string(ctx, &path.to_string_lossy());
                 break;
             }
         }
@@ -61,7 +90,7 @@ fn load_impl(ctx: &egui::Context) -> Option<ShellIcons> {
     for letter in 'A'..='Z' {
         let root = format!("{letter}:\\");
         if std::path::Path::new(&root).is_dir() {
-            if let Some(texture) = icon_for_path(ctx, &root) {
+            if let Some(texture) = icon_for_string(ctx, &root) {
                 icons.drives.insert(letter, texture);
             }
         }
@@ -75,9 +104,23 @@ fn load_impl(ctx: &egui::Context) -> Option<ShellIcons> {
 }
 
 #[cfg(windows)]
-fn icon_for_path(ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle> {
-    use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
+fn upload_icon(ctx: &egui::Context, hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON) -> Option<egui::TextureHandle> {
     use windows_sys::Win32::UI::WindowsAndMessaging::DestroyIcon;
+
+    if hicon.is_null() {
+        return None;
+    }
+    let result = unsafe { hicon_to_rgba(hicon) };
+    unsafe { DestroyIcon(hicon) };
+    let (w, h, rgba) = result?;
+    let color = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+    Some(ctx.load_texture("shell-icon", color, egui::TextureOptions::LINEAR))
+}
+
+/// 按路径(含 CLSID 字符串)取图标。
+#[cfg(windows)]
+fn icon_for_string(ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle> {
+    use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
 
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
     let mut info: SHFILEINFOW = unsafe { std::mem::zeroed() };
@@ -90,20 +133,53 @@ fn icon_for_path(ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle>
             SHGFI_ICON | SHGFI_LARGEICON,
         )
     };
-    if ok == 0 || info.hIcon.is_null() {
+    if ok == 0 {
         return None;
     }
-    let result = unsafe { hicon_to_rgba(info.hIcon) };
-    unsafe { DestroyIcon(info.hIcon) };
-    let (w, h, rgba) = result?;
-    let color = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
-    Some(ctx.load_texture("shell-icon", color, egui::TextureOptions::LINEAR))
+    upload_icon(ctx, info.hIcon)
+}
+
+/// 按已知文件夹 PIDL 取**专用**图标(与资源管理器一致)。
+#[cfg(windows)]
+fn icon_for_known_folder(
+    ctx: &egui::Context,
+    id: &windows_sys::core::GUID,
+) -> Option<egui::TextureHandle> {
+    use windows_sys::Win32::UI::Shell::{
+        ILFree, SHGetFileInfoW, SHGetKnownFolderIDList, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON,
+        SHGFI_PIDL,
+    };
+
+    let mut pidl: *mut windows_sys::Win32::UI::Shell::Common::ITEMIDLIST = std::ptr::null_mut();
+    let hr = unsafe { SHGetKnownFolderIDList(id, 0, std::ptr::null_mut(), &mut pidl) };
+    if hr < 0 || pidl.is_null() {
+        return None;
+    }
+
+    let mut info: SHFILEINFOW = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        SHGetFileInfoW(
+            pidl as *const u16,
+            0,
+            &mut info,
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_ICON | SHGFI_LARGEICON | SHGFI_PIDL,
+        )
+    };
+    unsafe { ILFree(pidl) };
+    if ok == 0 {
+        return None;
+    }
+    upload_icon(ctx, info.hIcon)
 }
 
 /// HICON → (宽, 高, RGBA 像素)。用 32bpp DIB + DrawIconEx 绘制后读回。
 #[cfg(windows)]
-unsafe fn hicon_to_rgba(hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON) -> Option<(u32, u32, Vec<u8>)> {
+unsafe fn hicon_to_rgba(
+    hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON,
+) -> Option<(u32, u32, Vec<u8>)> {
     use std::ffi::c_void;
+
     use windows_sys::Win32::Graphics::Gdi::{
         CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetObjectW, ReleaseDC,
         SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
@@ -149,9 +225,7 @@ unsafe fn hicon_to_rgba(hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICO
     bmi.bmiHeader.biCompression = 0; // BI_RGB
 
     let mut bits: *mut c_void = std::ptr::null_mut();
-    let dib = unsafe {
-        CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0)
-    };
+    let dib = unsafe { CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0) };
     let old = unsafe { SelectObject(mem_dc, dib) };
     let drawn = unsafe {
         DrawIconEx(mem_dc, 0, 0, hicon, w as i32, h as i32, 0, std::ptr::null_mut(), DI_NORMAL)

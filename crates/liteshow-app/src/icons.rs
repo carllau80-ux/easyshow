@@ -22,9 +22,8 @@ pub const CHECK: &str = "\u{E182}";
 pub const GEAR: &str = "\u{E270}";
 pub const ARROW_UP: &str = "\u{E08E}";
 pub const ARROW_DOWN: &str = "\u{E03E}";
-/// 预留:幻灯片功能将使用。
-#[allow(dead_code)]
 pub const SLIDESHOW: &str = "\u{ED32}";
+pub const TRASH: &str = "\u{E4A6}";
 pub const FOLDER: &str = "\u{E24A}";
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const HARD_DRIVE: &str = "\u{E29E}";
