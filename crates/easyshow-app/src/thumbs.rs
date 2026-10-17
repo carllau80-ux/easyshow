@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use liteshow_core::ImageBuf;
+use easyshow_core::ImageBuf;
 
 /// Long edge of generated thumbnails, in pixels.
 pub const THUMB_EDGE: u32 = 160;
@@ -43,7 +43,7 @@ impl ThumbService {
             let latest = latest.clone();
             let wanted = wanted.clone();
             std::thread::Builder::new()
-                .name(format!("liteshow-thumb-{i}"))
+                .name(format!("easyshow-thumb-{i}"))
                 .spawn(move || {
                     while let Ok((path, generation)) = req_rx.recv() {
                         if generation < latest.load(Ordering::SeqCst) {
@@ -96,16 +96,16 @@ fn thumb_one(path: &Path) -> Result<ImageBuf, String> {
     let cache_file = cache_file_for(path);
     if let Some(file) = &cache_file {
         if let Ok(bytes) = std::fs::read(file) {
-            if let Ok(image) = liteshow_core::thumb::decode_jpeg_bytes(&bytes) {
+            if let Ok(image) = easyshow_core::thumb::decode_jpeg_bytes(&bytes) {
                 return Ok(image);
             }
         }
     }
 
-    let thumb = liteshow_core::thumb::make_thumbnail(path, THUMB_EDGE).map_err(|e| e.to_string())?;
+    let thumb = easyshow_core::thumb::make_thumbnail(path, THUMB_EDGE).map_err(|e| e.to_string())?;
 
     if let Some(file) = &cache_file {
-        if let Ok(bytes) = liteshow_core::thumb::encode_jpeg(&thumb, JPEG_QUALITY) {
+        if let Ok(bytes) = easyshow_core::thumb::encode_jpeg(&thumb, JPEG_QUALITY) {
             if let Some(dir) = file.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
@@ -118,7 +118,7 @@ fn thumb_one(path: &Path) -> Result<ImageBuf, String> {
     Ok(thumb)
 }
 
-/// `<cache>/liteshow/thumbs/<2-hex>/<hash>-<mtime>-<size>.jpg`
+/// `<cache>/easyshow/thumbs/<2-hex>/<hash>-<mtime>-<size>.jpg`
 fn cache_file_for(path: &Path) -> Option<PathBuf> {
     let meta = std::fs::metadata(path).ok()?;
     let mtime = meta
@@ -136,17 +136,17 @@ fn cache_file_for(path: &Path) -> Option<PathBuf> {
 fn cache_root() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("Liteshow"))
+        std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("EasyShow"))
     }
     #[cfg(target_os = "macos")]
     {
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches/liteshow"))
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches/easyshow"))
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         std::env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-            .map(|p| p.join("liteshow"))
+            .map(|p| p.join("easyshow"))
     }
 }

@@ -3,6 +3,7 @@
 use std::io::BufReader;
 use std::path::Path;
 
+#[cfg(feature = "heic")]
 use crate::codec::probe::Format;
 use crate::image_buf::ImageBuf;
 
@@ -127,6 +128,7 @@ pub fn orientation_from_file(path: &Path) -> Option<u16> {
 
 fn read_exif(path: &Path) -> Option<exif::Exif> {
     match crate::codec::detect_format(path) {
+        #[cfg(feature = "heic")]
         Some(Format::Heif | Format::Avif) => {
             let bytes = crate::codec::heif::exif_bytes(path).ok()?;
             let tiff = locate_tiff(&bytes)?;
@@ -142,6 +144,7 @@ fn read_exif(path: &Path) -> Option<exif::Exif> {
 
 /// HEIF metadata items store EXIF either as `Exif\0\0` + TIFF, as a raw TIFF
 /// blob, or as a 4-byte big-endian offset followed by the TIFF blob.
+#[cfg(feature = "heic")]
 fn locate_tiff(data: &[u8]) -> Option<&[u8]> {
     fn is_tiff(d: &[u8]) -> bool {
         d.len() >= 4 && (d.starts_with(b"II*\0") || d.starts_with(b"MM\0*"))
@@ -255,6 +258,7 @@ mod tests {
         assert_eq!(fmt_num(1.8), "1.8");
     }
 
+    #[cfg(feature = "heic")]
     #[test]
     fn locates_tiff_variants() {
         let tiff = b"II*\0rest";

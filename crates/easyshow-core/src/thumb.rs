@@ -47,7 +47,7 @@ mod tests {
 
     #[test]
     fn thumbnails_shrink_to_edge() {
-        let dir = std::env::temp_dir().join("liteshow-core-tests");
+        let dir = std::env::temp_dir().join("easyshow-core-tests");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("thumb-src.png");
         let img = image::RgbaImage::from_fn(400, 300, |x, y| {
@@ -66,7 +66,7 @@ mod tests {
 
     #[test]
     fn small_images_are_not_upscaled() {
-        let dir = std::env::temp_dir().join("liteshow-core-tests");
+        let dir = std::env::temp_dir().join("easyshow-core-tests");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("thumb-small.png");
         image::RgbaImage::from_fn(64, 32, |_, _| image::Rgba([200, 100, 50, 255]))

@@ -1,16 +1,19 @@
-# Liteshow
+# EasyShow
 
 轻量级跨平台图片查看器(Rust),已到 **M3 打磨**阶段:浏览、EXIF、主题双语、批量删除、幻灯片均已可用。
 
-- 定位:秒开、顺滑、够用 —— 冷启动 < 500 ms,安装包 < 25 MB,内置 12+ 主流图片格式(含 HEIC 与实况照片静帧),中英双语、主题色可换
+- 定位:秒开、顺滑、够用 —— 冷启动 < 500 ms,内置 12+ 主流图片格式(含 HEIC 与实况照片静帧),中英双语、主题色可换
+- **两个编译变体**:`完整版`(含 HEIC/AVIF 运行时解码)与 `轻量版 lite`(不含 HEIC/AVIF 相关代码,零外部依赖)
 - 平台:Linux(X11 / Wayland)· Windows · macOS
 - 技术栈:eframe(egui)+ wgpu;zune-jpeg / image / fast_image_resize 解码管线;HEIC/AVIF 经运行时加载的 libheif(编译期零 C 依赖)
 
 ## 快速开始
 
 ```bash
-cargo run -p liteshow-app -- <图片文件或文件夹>   # 打开图片 / 浏览目录
-cargo test -p liteshow-core                        # 解码 / EXIF / 缩放 / HEIC 单测
+cargo run -p easyshow-app -- <图片文件或文件夹>   # 打开图片 / 浏览目录(完整版)
+cargo run -p easyshow-app --no-default-features -- <路径>  # 轻量版(无 HEIC/AVIF)
+cargo test -p easyshow-core                        # 解码 / EXIF / 缩放 / HEIC 单测
+cargo test -p easyshow-core --no-default-features  # 轻量版单测(HEIC 用例自动剔除)
 ```
 
 键位:← → 翻页 · + / − 缩放 · 0 适应窗口 · 1 实际大小 · R 旋转 · F 镜像 · F11 全屏 · Esc 退出全屏 ·
@@ -20,8 +23,8 @@ cargo test -p liteshow-core                        # 解码 / EXIF / 缩放 / HE
 
 ## 版本与发布
 
-- 版本号唯一来源:`Cargo.toml` 的 `[workspace.package]`(当前 **0.2.1**),每次更新用 `packaging/bump-version.sh` 递增第三位(默认 patch)
-- 发布流程与 GitHub 上传步骤见 [docs/PUBLISHING.md](docs/PUBLISHING.md);打 `v*` 标签会触发三平台 CI 出包
+- 版本号唯一来源:`Cargo.toml` 的 `[workspace.package]`(当前 **0.2.2**),每次更新用 `packaging/bump-version.sh` 递增第三位(默认 patch)
+- 发布流程与 GitHub 上传步骤见 [docs/PUBLISHING.md](docs/PUBLISHING.md);打 `v*` 标签会触发三平台 CI 出包(每平台均含 full/lite 两个变体)
 
 ## 文档
 
@@ -30,38 +33,38 @@ cargo test -p liteshow-core                        # 解码 / EXIF / 缩放 / HE
 ## 部署(用户级本地安装,无需 sudo)
 
 ```bash
-packaging/install-local.sh                 # 构建(如缺)+ 安装二进制/图标/桌面条目 + 桌面快捷方式
-packaging/install-local.sh --set-default   # 可选:把 Liteshow 设为常见图片格式的默认打开程序
-packaging/install-local.sh --uninstall     # 卸载以上全部内容
+packaging/install-local.sh                 # 完整版:构建(如缺)+ 安装二进制/图标/桌面条目 + 桌面快捷方式
+packaging/install-local.sh --lite          # 轻量版(安装为 easyshow-lite,与完整版可并存)
+packaging/install-local.sh --set-default   # 可选:把 EasyShow 设为常见图片格式的默认打开程序
+packaging/install-local.sh --uninstall     # 卸载以上全部内容(--lite --uninstall 卸载轻量版)
 ```
 
 安装位置(均为用户级,不碰系统目录):
 
 | 内容 | 路径 |
 |---|---|
-| 可执行文件 | `~/.local/bin/liteshow` |
-| 桌面条目(应用列表 + "打开方式") | `~/.local/share/applications/liteshow.desktop` |
-| 图标(256/128/64) | `~/.local/share/icons/hicolor/*/apps/liteshow.png` |
-| 桌面快捷方式 | `~/桌面/liteshow.desktop`(自动识别 xdg 桌面目录) |
+| 可执行文件 | `~/.local/bin/easyshow` |
+| 桌面条目(应用列表 + "打开方式") | `~/.local/share/applications/easyshow.desktop` |
+| 图标(256/128/64) | `~/.local/share/icons/hicolor/*/apps/easyshow.png` |
+| 桌面快捷方式 | `~/桌面/easyshow.desktop`(自动识别 xdg 桌面目录) |
 
 ## 打包(安装包)
 
+**完整版 full**(含 HEIC/AVIF)与**轻量版 lite**(不含 HEIC/AVIF,不随附任何 DLL)成套产出,两个变体可并存安装:
+
 | 平台 | 产物 | 构建方式 |
 |---|---|---|
-| Linux | `liteshow_<ver>_amd64.deb`、`liteshow-<ver>-linux-x86_64.tar.gz`(便携) | `packaging/build-linux.sh` → `dist/linux/` |
-| Windows | `Liteshow-<ver>-Setup.exe`(NSIS 安装包)、`liteshow-<ver>-windows-x86_64.zip`(便携) | `packaging/windows/make-package.sh`(可在 Linux 上交叉编译;CI 中为原生构建) |
-| macOS | `Liteshow-<ver>-universal.dmg`(Intel + Apple Silicon 通用) | `packaging/macos/make-bundle.sh`(需 macOS 或 CI) |
-| 三平台 | 同上 + AppImage | `.github/workflows/release.yml`(推送 `v*` 标签或手动触发) |
+| Linux | `easyshow_<ver>_amd64.deb` / `easyshow-lite_<ver>_amd64.deb`;`easyshow-<ver>-linux-x86_64-{full,lite}.tar.gz`(便携) | `packaging/build-linux.sh` → `dist/linux/` |
+| Windows | `EasyShow-<ver>-{Full,Lite}-Setup.exe`(NSIS 安装包);`easyshow-<ver>-windows-x86_64-{full,lite}.zip`(便携) | `packaging/windows/make-package.sh`(自动编译两个 exe;可在 Linux 上交叉编译) |
+| macOS | `EasyShow-<ver>-{full,lite}.dmg`(Intel + Apple Silicon 通用) | `packaging/macos/make-bundle.sh`(需 macOS 或 CI) |
+| 三平台 | 同上 + 两个 AppImage | `.github/workflows/release.yml`(推送 `v*` 标签或手动触发) |
 
-Windows 安装包特性:用户级安装(无需管理员)、开始菜单/桌面快捷方式、加入常见图片格式"打开方式"、控制面板卸载项,含中文界面。
+Windows 安装包特性:用户级安装(无需管理员)、开始菜单/桌面快捷方式、加入常见图片格式"打开方式"、控制面板卸载项,含中文界面;完整版与轻量版使用**不同的安装目录与注册表键,可同时安装**。
 
-> Windows 两个版本:**完整版**(默认,`SHIP_LIBHEIF=1`)随包附带 HEIC/AVIF 解码库,Setup ≈ 17 MB / zip ≈ 24 MB,HEIC 开箱即用;**轻量版**(`SHIP_LIBHEIF=0`)不带 DLL,Setup ≈ 3.4 MB,HEIC 依赖系统或同目录的 libheif.dll。
-
-> **HEIC/AVIF 说明**:安装包默认**不随附** libheif 运行时(保持轻量,Windows 便携包 ≈5MB)。
-> 系统已提供 libheif 时(如 Linux 有 `libheif1`、macOS `brew install libheif`、
-> Windows 将 `libheif.dll` 及其依赖放入程序目录或 PATH)自动启用;缺失时仅 HEIC/AVIF
-> 提示不可用,其余格式不受影响。需随包分发时可 `SHIP_LIBHEIF=1`(Windows)/
-> `LITESHOW_BUNDLE_LIBHEIF=1`(macOS)重新打"完整版"。
+> **变体说明**
+> - **完整版 full**:编译含 HEIC/AVIF 解码(运行时 dlopen libheif,编译期零 C 依赖)。Windows 完整版随包附带 libheif DLL 闭包(Setup ≈ 17 MB / zip ≈ 24 MB),HEIC 开箱即用;Linux 完整版经系统 `libheif1`(deb 中 Recommends);macOS 完整版默认把 libheif 打入 App 内。
+> - **轻量版 lite**:以 `--no-default-features` 编译,产物**不含任何 HEIF 相关代码**——HEIC/AVIF 文件不再被识别与列出,其余格式与功能完全一致,零外部依赖(Windows Setup ≈ 3.4 MB)。
+> - 命令行构建:完整版 `cargo build --release -p easyshow-app`;轻量版加 `--no-default-features`。变体由 `heic` feature 决定——lite 版的窗口标题与设置菜单标注为 **EasyShow Lite**,Windows exe 产品名同样区分。
 
 ## 功能(当前版本)
 
@@ -71,7 +74,7 @@ Windows 安装包特性:用户级安装(无需管理员)、开始菜单/桌面�
 - **幻灯片**:工具栏 ▶ 或浏览模式 Space 播放;播放**整个目录**或**选中的批量照片**(网格中多选 ≥2 张后启动即只在选中集内循环);间隔 3 / 5 / 10 秒可设
 - **批量删除(默认只读)**:缺省不开启删除;设置中勾选「允许删除」后,网格里 Ctrl/Shift 多选、Delete 键或垃圾桶按钮 → **二次确认弹窗** → 移入系统回收站(三平台,可恢复)
 - **信息面板**(右侧):文件尺寸、大小、格式、修改时间 + **完整 EXIF**(相机、镜头、光圈、快门、ISO、焦距、拍摄时间、**GPS 坐标**;HEIC/AVIF 亦可读)
-- **格式**:JPEG / PNG / GIF / WebP / BMP / TIFF / ICO / TGA / PNM / QOI;HEIC / AVIF(运行时自动探测 libheif)
+- **格式**:JPEG / PNG / GIF / WebP / BMP / TIFF / ICO / TGA / PNM / QOI;HEIC / AVIF(仅完整版,运行时自动探测 libheif;轻量版不识别 HEIC/AVIF)
 - **速度**:缩略图磁盘缓存(二次打开秒出)、相邻图预取(翻页零等待)、按显示尺寸解码、头部读尺寸不整图解码;**视口优先**——上万文件的大目录只解析"滚动到哪里就显示哪里"的可见区域(±2 行预读),拖动不卡
 - **排序**:名称(自然序,IMG_2 在 IMG_10 前)/ 修改时间 / 创建时间 / 大小 / 类型,升降序一键切换
 - **鼠标**:滚轮按"格"缩放(每格 1.15×,光标为锚,平台一致手感)、触控板捏合缩放、左/中键拖动平移、双击适应↔1:1;可在设置中把滚轮改为"翻页"

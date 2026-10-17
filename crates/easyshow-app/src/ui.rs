@@ -3,7 +3,7 @@
 
 use eframe::egui;
 
-use crate::app::{display_size, file_name, human_size, upload_thumb_texture, LiteshowApp, Mode};
+use crate::app::{display_size, file_name, human_size, upload_thumb_texture, EasyShowApp, Mode};
 use crate::i18n::{tr, Key, Lang};
 use crate::icons;
 use crate::sort::SortKey;
@@ -54,7 +54,7 @@ fn sort_label(lang: Lang, key: SortKey) -> &'static str {
 // Toolbar
 // ----------------------------------------------------------------------
 
-pub fn toolbar(app: &mut LiteshowApp, ui: &mut egui::Ui) {
+pub fn toolbar(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     let lang = app.lang;
     let mut pick_sort: Option<SortKey> = None;
     let mut flip_sort_dir = false;
@@ -166,7 +166,7 @@ pub fn toolbar(app: &mut LiteshowApp, ui: &mut egui::Ui) {
                     }
                 }
                 ui.separator();
-                ui.weak(format!("Liteshow v{}", env!("CARGO_PKG_VERSION")));
+                ui.weak(format!("{} v{}", crate::APP_NAME, env!("CARGO_PKG_VERSION")));
             })
             .response
             .on_hover_text(tr(lang, Key::Settings));
@@ -257,7 +257,7 @@ enum TreeAction {
     Select(std::path::PathBuf),
 }
 
-pub fn tree_panel(app: &mut LiteshowApp, ui: &mut egui::Ui) {
+pub fn tree_panel(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     let mut actions: Vec<TreeAction> = Vec::new();
     egui::ScrollArea::vertical()
@@ -342,7 +342,7 @@ const TILE_H: f32 = 158.0;
 const TILE_GAP: f32 = 10.0;
 const IMG_H: f32 = 132.0;
 
-pub fn grid(app: &mut LiteshowApp, ui: &mut egui::Ui) {
+pub fn grid(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     let lang = app.lang;
     ui.add_space(8.0);
     if app.entries.is_empty() {
@@ -489,7 +489,7 @@ fn elide(text: &str, max_chars: usize) -> String {
 // Viewer canvas (center, Viewer mode)
 // ----------------------------------------------------------------------
 
-pub fn canvas(app: &mut LiteshowApp, ui: &mut egui::Ui) {
+pub fn canvas(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     let rect = ui.available_rect_before_wrap();
     app.canvas_size = rect.size();
 
@@ -567,7 +567,7 @@ pub fn canvas(app: &mut LiteshowApp, ui: &mut egui::Ui) {
 // Info panel (right)
 // ----------------------------------------------------------------------
 
-pub fn info_panel(app: &mut LiteshowApp, ui: &mut egui::Ui) {
+pub fn info_panel(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     let lang = app.lang;
     ui.add_space(8.0);
     ui.label(egui::RichText::new(tr(lang, Key::Info)).strong());
@@ -645,7 +645,7 @@ fn kv(ui: &mut egui::Ui, label: &str, value: String) {
 // Status bar (bottom)
 // ----------------------------------------------------------------------
 
-pub fn status(app: &mut LiteshowApp, ui: &mut egui::Ui) {
+pub fn status(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     let lang = app.lang;
     ui.horizontal(|ui| {
         if let Some(info) = &app.info {
@@ -691,7 +691,7 @@ pub fn status(app: &mut LiteshowApp, ui: &mut egui::Ui) {
 // 删除确认(模态)
 // ----------------------------------------------------------------------
 
-pub fn delete_modal(app: &mut LiteshowApp, ctx: &egui::Context) {
+pub fn delete_modal(app: &mut EasyShowApp, ctx: &egui::Context) {
     let Some(paths) = app.pending_delete.clone() else { return };
     let lang = app.lang;
     let mut cancel = false;

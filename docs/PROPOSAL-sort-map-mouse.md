@@ -116,6 +116,6 @@ struct ImageEntry {
 
 ## 附录 B:涉及改动的模块
 
-- `liteshow-core`:`exif.rs`(+GPS 解析)、`thumb.rs`(GPS 随缩略图提取)
-- `liteshow-app`:`app.rs`(排序模型 `ImageEntry`、`Mode::Map`)、`ui.rs`(排序下拉、地图视图、信息面板「位置」行)、新增 `map.rs`(底图解码/投影/标记/聚合)、`assets/world-110m.json`(内嵌数据)
+- `easyshow-core`:`exif.rs`(+GPS 解析)、`thumb.rs`(GPS 随缩略图提取)
+- `easyshow-app`:`app.rs`(排序模型 `ImageEntry`、`Mode::Map`)、`ui.rs`(排序下拉、地图视图、信息面板「位置」行)、新增 `map.rs`(底图解码/投影/标记/聚合)、`assets/world-110m.json`(内嵌数据)
 - 打包:world 数据版权说明加入 licenses;二进制体积预计 +~60 KB(压缩后更小)

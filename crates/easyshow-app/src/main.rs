@@ -15,9 +15,17 @@ mod viewer;
 
 use clap::Parser;
 
-/// Liteshow — a lightweight, fast image viewer.
+/// 变体标识:轻量版(编译时关闭 `heic` feature,无 HEIC/AVIF)在标题栏与设置菜单中
+/// 标注为 "EasyShow Lite",与完整版一眼区分。
+pub const APP_NAME: &str = if cfg!(feature = "heic") {
+    "EasyShow"
+} else {
+    "EasyShow Lite"
+};
+
+/// EasyShow — a lightweight, fast image viewer.
 #[derive(Parser, Debug)]
-#[command(name = "liteshow", version, about = "Liteshow — a lightweight, fast image viewer")]
+#[command(name = "easyshow", version, about = "EasyShow — a lightweight, fast image viewer")]
 struct Args {
     /// Image file or directory to open
     path: Option<std::path::PathBuf>,
@@ -29,19 +37,19 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("Liteshow")
+            .with_title(APP_NAME)
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([640.0, 400.0]),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Liteshow",
+        APP_NAME,
         options,
         Box::new(|cc| {
             fonts::install(&cc.egui_ctx);
             theme::install(&cc.egui_ctx);
-            Ok(Box::new(app::LiteshowApp::new(cc, args.path)))
+            Ok(Box::new(app::EasyShowApp::new(cc, args.path)))
         }),
     )
 }

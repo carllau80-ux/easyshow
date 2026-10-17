@@ -1,16 +1,16 @@
 [workspace]
 resolver = "2"
-members = ["crates/liteshow-core", "crates/liteshow-app"]
+members = ["crates/easyshow-core", "crates/easyshow-app"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-description = "Liteshow — a lightweight, fast cross-platform image viewer"
+description = "EasyShow — a lightweight, fast cross-platform image viewer"
 
 [workspace.dependencies]
-# --- liteshow-core ---
+# --- easyshow-core ---
 image = { version = "0.25", default-features = false, features = [
     "jpeg", "png", "gif", "webp", "bmp", "tiff", "ico", "qoi", "tga", "pnm",
 ] }
@@ -21,7 +21,7 @@ libloading = "0.9"
 thiserror = "2"
 log = "0.4"
 
-# --- liteshow-app ---
+# --- easyshow-app ---
 eframe = { version = "0.37", default-features = false, features = [
     "glow", "x11", "default_fonts",
 ] }

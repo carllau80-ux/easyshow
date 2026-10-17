@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use liteshow_core::from_extension;
+use easyshow_core::from_extension;
 
 /// One image file with the metadata needed for sorting and the info panel.
 #[derive(Debug, Clone)]

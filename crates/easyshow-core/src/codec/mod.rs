@@ -1,7 +1,9 @@
 //! Decode dispatch: magic-byte probing, a fast zune-jpeg path for JPEG, the
-//! `image` crate for everything else, and runtime-loaded libheif for HEIC.
+//! `image` crate for everything else, and (with the `heic` feature)
+//! runtime-loaded libheif for HEIC/AVIF.
 
 pub mod probe;
+#[cfg(feature = "heic")]
 pub mod heif;
 
 use std::io::Read;
@@ -26,6 +28,7 @@ pub fn decode_file(path: &Path) -> Result<ImageBuf> {
 
     match format {
         Format::Jpeg => decode_jpeg(path),
+        #[cfg(feature = "heic")]
         Format::Heif | Format::Avif => heif::decode(path),
         _ => decode_via_image(path),
     }
@@ -75,11 +78,12 @@ mod tests {
     use super::*;
 
     fn tmp_path(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join("liteshow-core-tests");
+        let dir = std::env::temp_dir().join("easyshow-core-tests");
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(name)
     }
 
+    #[cfg(feature = "heic")]
     fn testdata(name: &str) -> std::path::PathBuf {
         Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata")).join(name)
     }
@@ -115,6 +119,7 @@ mod tests {
         assert!((60..=130).contains(&px[2]), "blue channel out of range: {px:?}");
     }
 
+    #[cfg(feature = "heic")]
     #[test]
     fn decodes_hevc_heic_sample() {
         let path = testdata("sample.heic");
@@ -132,6 +137,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "heic")]
     #[test]
     fn decodes_av1_heif_sample() {
         let path = testdata("sample-av1.heic");

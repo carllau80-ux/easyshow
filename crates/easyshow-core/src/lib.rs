@@ -1,4 +1,4 @@
-//! Liteshow core: format probing, decoding, EXIF orientation and resizing.
+//! EasyShow core: format probing, decoding, EXIF orientation and resizing.
 //!
 //! This crate has no UI dependencies so it can be unit-tested and reused by
 //! benches, CLIs or a future thumbnail service.
@@ -18,9 +18,10 @@ pub use exif::ExifSummary;
 pub use image_buf::ImageBuf;
 
 /// Image dimensions without decoding pixels (JPEG/PNG/... read headers;
-/// HEIC/AVIF query the container).
+/// HEIC/AVIF query the container, with the `heic` feature).
 pub fn image_dimensions(path: &Path) -> Result<(u32, u32)> {
     match codec::detect_format(path) {
+        #[cfg(feature = "heic")]
         Some(Format::Heif | Format::Avif) => codec::heif::dimensions(path),
         _ => image::image_dimensions(path)
             .map(|(w, h)| (w, h))

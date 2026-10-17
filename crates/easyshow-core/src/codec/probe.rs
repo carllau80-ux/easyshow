@@ -14,7 +14,11 @@ pub enum Format {
     Qoi,
     Pnm,
     Tga,
+    /// HEIC/HEIF 容器(需 `heic` feature)
+    #[cfg(feature = "heic")]
     Heif,
+    /// AVIF 容器(需 `heic` feature)
+    #[cfg(feature = "heic")]
     Avif,
 }
 
@@ -31,7 +35,9 @@ impl Format {
             Format::Qoi => "QOI",
             Format::Pnm => "PNM",
             Format::Tga => "TGA",
+            #[cfg(feature = "heic")]
             Format::Heif => "HEIC",
+            #[cfg(feature = "heic")]
             Format::Avif => "AVIF",
         }
     }
@@ -70,6 +76,7 @@ pub fn probe(head: &[u8]) -> Option<Format> {
         return Some(Format::Pnm);
     }
     // ISO base media file format (HEIF family): ....ftyp<brand>
+    #[cfg(feature = "heic")]
     if head.len() >= 12 && &head[4..8] == b"ftyp" {
         return match &head[8..12] {
             b"avif" | b"avis" => Some(Format::Avif),
@@ -95,7 +102,9 @@ pub fn from_extension(path: &Path) -> Option<Format> {
         "qoi" => Format::Qoi,
         "ppm" | "pgm" | "pbm" | "pnm" | "pam" => Format::Pnm,
         "tga" => Format::Tga,
+        #[cfg(feature = "heic")]
         "heic" | "heif" | "hif" => Format::Heif,
+        #[cfg(feature = "heic")]
         "avif" => Format::Avif,
         _ => return None,
     })
@@ -117,17 +126,23 @@ mod tests {
         assert_eq!(probe(&[0, 0, 1, 0, 1, 0]), Some(Format::Ico));
         assert_eq!(probe(b"qoif\x00\x00\x00\x10"), Some(Format::Qoi));
         assert_eq!(probe(b"P6\n1024 768\n255\n"), Some(Format::Pnm));
-        assert_eq!(probe(&[0, 0, 0, 24, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c']), Some(Format::Heif));
-        assert_eq!(probe(&[0, 0, 0, 24, b'f', b't', b'y', b'p', b'm', b'i', b'f', b'1']), Some(Format::Heif));
-        assert_eq!(probe(&[0, 0, 0, 24, b'f', b't', b'y', b'p', b'a', b'v', b'i', b'f']), Some(Format::Avif));
+        #[cfg(feature = "heic")]
+        {
+            assert_eq!(probe(&[0, 0, 0, 24, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c']), Some(Format::Heif));
+            assert_eq!(probe(&[0, 0, 0, 24, b'f', b't', b'y', b'p', b'm', b'i', b'f', b'1']), Some(Format::Heif));
+            assert_eq!(probe(&[0, 0, 0, 24, b'f', b't', b'y', b'p', b'a', b'v', b'i', b'f']), Some(Format::Avif));
+        }
         assert_eq!(probe(b"not an image at all"), None);
     }
 
     #[test]
     fn extension_fallback_covers_tga_and_heif() {
         assert_eq!(from_extension(Path::new("x.tga")), Some(Format::Tga));
-        assert_eq!(from_extension(Path::new("IMG_1234.HEIC")), Some(Format::Heif));
-        assert_eq!(from_extension(Path::new("photo.avif")), Some(Format::Avif));
+        #[cfg(feature = "heic")]
+        {
+            assert_eq!(from_extension(Path::new("IMG_1234.HEIC")), Some(Format::Heif));
+            assert_eq!(from_extension(Path::new("photo.avif")), Some(Format::Avif));
+        }
         assert_eq!(from_extension(Path::new("readme.txt")), None);
     }
 }

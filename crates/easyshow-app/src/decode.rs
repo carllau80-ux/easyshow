@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use liteshow_core::{decode_file, ImageBuf};
+use easyshow_core::{decode_file, ImageBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Purpose {
@@ -63,7 +63,7 @@ impl DecodeService {
             let ev_tx = ev_tx.clone();
             let latest = latest.clone();
             std::thread::Builder::new()
-                .name(format!("liteshow-decode-{i}"))
+                .name(format!("easyshow-decode-{i}"))
                 .spawn(move || {
                     while let Ok(req) = req_rx.recv() {
                         // Superseded while queued — nothing to do.
@@ -112,18 +112,18 @@ impl DecodeService {
     }
 }
 
-fn decode_one(req: &DecodeRequest) -> liteshow_core::Result<(ImageBuf, bool)> {
+fn decode_one(req: &DecodeRequest) -> easyshow_core::Result<(ImageBuf, bool)> {
     let mut image = decode_file(&req.path)?;
-    if let Some(orientation) = liteshow_core::exif::orientation_from_file(&req.path) {
-        image = liteshow_core::exif::apply_orientation(image, orientation);
+    if let Some(orientation) = easyshow_core::exif::orientation_from_file(&req.path) {
+        image = easyshow_core::exif::apply_orientation(image, orientation);
     }
     let mut downscaled = false;
     if let Some((max_w, max_h)) = req.max_dim {
-        let scale = liteshow_core::resize::fit_scale(image.width, image.height, max_w, max_h);
+        let scale = easyshow_core::resize::fit_scale(image.width, image.height, max_w, max_h);
         if scale < 0.98 {
             let new_w = ((image.width as f64 * scale).round() as u32).max(1);
             let new_h = ((image.height as f64 * scale).round() as u32).max(1);
-            image = liteshow_core::resize::resize_rgba(&image, new_w, new_h)?;
+            image = easyshow_core::resize::resize_rgba(&image, new_w, new_h)?;
             downscaled = true;
         }
     }

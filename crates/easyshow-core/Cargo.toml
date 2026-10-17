@@ -1,0 +1,25 @@
+[package]
+name = "easyshow-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "EasyShow core: decoding, EXIF and resizing with no UI dependencies"
+
+[dependencies]
+image = { workspace = true }
+zune-jpeg = { workspace = true }
+fast_image_resize = { workspace = true }
+kamadak-exif = { workspace = true }
+libloading = { workspace = true, optional = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+
+[features]
+default = ["heic"]
+# HEIC/AVIF 解码:运行时 dlopen libheif(经 libloading 直连,无编译期 C 依赖)。
+# 关闭后编译产物不含任何 HEIF 相关代码——HEIC/AVIF 文件不再被识别(轻量版)。
+heic = ["dep:libloading"]
+
+[[example]]
+name = "heif_exif_probe"
+required-features = ["heic"]

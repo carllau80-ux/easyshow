@@ -1,16 +1,21 @@
 [package]
-name = "liteshow-app"
+name = "easyshow-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Liteshow — a lightweight, fast cross-platform image viewer"
+description = "EasyShow — a lightweight, fast cross-platform image viewer"
 
 [[bin]]
-name = "liteshow"
+name = "easyshow"
 path = "src/main.rs"
 
+[features]
+default = ["heic"]
+# HEIC/AVIF 支持(默认开;轻量版用 --no-default-features 编译移除)。
+heic = ["easyshow-core/heic"]
+
 [dependencies]
-liteshow-core = { path = "../liteshow-core" }
+easyshow-core = { path = "../easyshow-core", default-features = false }
 eframe = { workspace = true }
 clap = { workspace = true }
 crossbeam-channel = { workspace = true }

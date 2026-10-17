@@ -14,15 +14,15 @@ fn decodes_and_downscales_24mp_jpeg() {
         return;
     }
     let t0 = std::time::Instant::now();
-    let image = liteshow_core::decode_file(&path).expect("decode 24MP jpeg");
+    let image = easyshow_core::decode_file(&path).expect("decode 24MP jpeg");
     let decode_ms = t0.elapsed().as_secs_f64() * 1000.0;
     assert_eq!((image.width, image.height), (6000, 4000));
 
     let t1 = std::time::Instant::now();
-    let scale = liteshow_core::resize::fit_scale(image.width, image.height, 2400, 1400);
+    let scale = easyshow_core::resize::fit_scale(image.width, image.height, 2400, 1400);
     let new_w = (image.width as f64 * scale).round() as u32;
     let new_h = (image.height as f64 * scale).round() as u32;
-    let small = liteshow_core::resize::resize_rgba(&image, new_w, new_h).expect("downscale");
+    let small = easyshow_core::resize::resize_rgba(&image, new_w, new_h).expect("downscale");
     let resize_ms = t1.elapsed().as_secs_f64() * 1000.0;
     assert_eq!((small.width, small.height), (new_w, new_h));
     eprintln!("timing: 24MP jpeg decode {decode_ms:.1} ms, downscale {resize_ms:.1} ms");
@@ -35,7 +35,7 @@ fn decodes_portrait_png() {
         eprintln!("skip: {} missing", path.display());
         return;
     }
-    let image = liteshow_core::decode_file(&path).expect("decode png");
+    let image = easyshow_core::decode_file(&path).expect("decode png");
     assert_eq!((image.width, image.height), (900, 1400));
 }
 
@@ -45,11 +45,14 @@ fn reads_dimensions_without_decoding() {
     if !path.exists() {
         return;
     }
-    assert_eq!(liteshow_core::image_dimensions(&path).unwrap(), (6000, 4000));
+    assert_eq!(easyshow_core::image_dimensions(&path).unwrap(), (6000, 4000));
 
-    let heic = testdata("sample.heic");
-    if heic.exists() && liteshow_core::codec::heif::is_available() {
-        assert_eq!(liteshow_core::image_dimensions(&heic).unwrap(), (1600, 1000));
+    #[cfg(feature = "heic")]
+    {
+        let heic = testdata("sample.heic");
+        if heic.exists() && easyshow_core::codec::heif::is_available() {
+            assert_eq!(easyshow_core::image_dimensions(&heic).unwrap(), (1600, 1000));
+        }
     }
 }
 
@@ -60,8 +63,8 @@ fn reads_exif_summary_from_jpeg() {
         eprintln!("skip: {} missing", path.display());
         return;
     }
-    let s = liteshow_core::exif::read_summary(&path).expect("exif summary");
-    assert_eq!(s.make.as_deref(), Some("LiteshowCam"));
+    let s = easyshow_core::exif::read_summary(&path).expect("exif summary");
+    assert_eq!(s.make.as_deref(), Some("EasyShowCam"));
     assert_eq!(s.model.as_deref(), Some("Model X"));
     assert_eq!(s.lens.as_deref(), Some("FE 24-70mm F2.8"));
     assert_eq!(s.iso, Some(400));
@@ -74,6 +77,7 @@ fn reads_exif_summary_from_jpeg() {
     assert!((lon - 121.473701).abs() < 1e-4, "lon={lon}");
 }
 
+#[cfg(feature = "heic")]
 #[test]
 fn reads_exif_summary_from_heic() {
     let path = testdata("sample-exif.heic");
@@ -81,12 +85,12 @@ fn reads_exif_summary_from_heic() {
         eprintln!("skip: {} missing", path.display());
         return;
     }
-    if !liteshow_core::codec::heif::is_available() {
+    if !easyshow_core::codec::heif::is_available() {
         eprintln!("skip: libheif unavailable");
         return;
     }
-    let s = liteshow_core::exif::read_summary(&path).expect("heic exif summary");
-    assert_eq!(s.make.as_deref(), Some("LiteshowCam"));
+    let s = easyshow_core::exif::read_summary(&path).expect("heic exif summary");
+    assert_eq!(s.make.as_deref(), Some("EasyShowCam"));
     assert_eq!(s.iso, Some(400));
     assert_eq!(s.f_number.as_deref(), Some("f/2.8"));
     let (lat, lon) = s.gps.expect("heic gps coordinates");

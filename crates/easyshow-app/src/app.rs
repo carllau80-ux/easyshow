@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eframe::egui;
-use liteshow_core::{ExifSummary, ImageBuf};
+use easyshow_core::{ExifSummary, ImageBuf};
 
 use crate::decode::{DecodeEvent, DecodeService, Purpose};
 use crate::i18n::{tr, Key, Lang};
@@ -50,7 +50,7 @@ pub struct SlideshowState {
     next_at: f64,
 }
 
-pub struct LiteshowApp {
+pub struct EasyShowApp {
     pub lang: Lang,
     // --- directory tree ---
     pub tree_root: TreeNode,
@@ -259,7 +259,7 @@ fn normalize_path(path: PathBuf) -> PathBuf {
 const PREFETCH_CAP: usize = 4;
 const THUMB_CACHE_CAP: usize = 512;
 
-impl LiteshowApp {
+impl EasyShowApp {
     pub fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>) -> Self {
         let lang = Lang::detect();
         let home = home_dir();
@@ -365,7 +365,7 @@ impl LiteshowApp {
             .current_path()
             .map(|p| file_name(p))
             .unwrap_or_else(|| file_name(&dir));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{title} — Liteshow")));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{title} — EasyShow")));
         if mode == Mode::Viewer {
             self.load_current(ctx);
         } else {
@@ -626,7 +626,7 @@ impl LiteshowApp {
         self.selected = self.selected.min(self.nav_order.len() - 1);
         let Some(path) = self.path_at_pos(self.selected) else { return };
         self.refresh_info();
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{} — Liteshow", file_name(&path))));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{} — EasyShow", file_name(&path))));
 
         // Same image already displayed (e.g. re-entering the viewer): reuse.
         if let Some(current) = &self.current {
@@ -827,9 +827,9 @@ impl LiteshowApp {
             return;
         }
         let meta = std::fs::metadata(&path).ok();
-        let dims = liteshow_core::image_dimensions(&path).ok();
-        let exif = liteshow_core::exif::read_summary(&path);
-        let format = liteshow_core::codec::detect_format(&path).map(|f| f.name());
+        let dims = easyshow_core::image_dimensions(&path).ok();
+        let exif = easyshow_core::exif::read_summary(&path);
+        let format = easyshow_core::codec::detect_format(&path).map(|f| f.name());
         self.info = Some(InfoData {
             path,
             dims,
@@ -1075,7 +1075,7 @@ impl LiteshowApp {
     }
 }
 
-impl eframe::App for LiteshowApp {
+impl eframe::App for EasyShowApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
@@ -1126,17 +1126,17 @@ impl eframe::App for LiteshowApp {
             self.set_visible_thumbs(Vec::new());
         }
 
-        egui::Panel::top("liteshow-toolbar").show(ui, |ui| crate::ui::toolbar(self, ui));
-        egui::Panel::bottom("liteshow-status").show(ui, |ui| crate::ui::status(self, ui));
+        egui::Panel::top("easyshow-toolbar").show(ui, |ui| crate::ui::toolbar(self, ui));
+        egui::Panel::bottom("easyshow-status").show(ui, |ui| crate::ui::status(self, ui));
         if self.show_tree {
-            egui::Panel::left("liteshow-tree")
+            egui::Panel::left("easyshow-tree")
                 .default_size(215.0)
                 .size_range(150.0..=460.0)
                 .resizable(true)
                 .show(ui, |ui| crate::ui::tree_panel(self, ui));
         }
         if self.show_info {
-            egui::Panel::right("liteshow-info")
+            egui::Panel::right("easyshow-info")
                 .default_size(268.0)
                 .size_range(200.0..=420.0)
                 .resizable(true)
@@ -1182,13 +1182,13 @@ fn rotate_flip(src: &ImageBuf, turns: u8, flip_h: bool) -> Arc<ImageBuf> {
 fn upload_texture(ctx: &egui::Context, image: &ImageBuf) -> egui::TextureHandle {
     let color =
         egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba);
-    ctx.load_texture("liteshow-image", color, egui::TextureOptions::LINEAR)
+    ctx.load_texture("easyshow-image", color, egui::TextureOptions::LINEAR)
 }
 
 pub fn upload_thumb_texture(ctx: &egui::Context, image: &ImageBuf) -> egui::TextureHandle {
     let color =
         egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba);
-    ctx.load_texture("liteshow-thumb", color, egui::TextureOptions::LINEAR)
+    ctx.load_texture("easyshow-thumb", color, egui::TextureOptions::LINEAR)
 }
 
 pub fn human_size(bytes: u64) -> String {

@@ -1,6 +1,6 @@
-# Liteshow · 轻量级跨平台图片查看器 — 功能规划与技术方案
+# EasyShow · 轻量级跨平台图片查看器 — 功能规划与技术方案
 
-> **Liteshow** 为项目名称(早期工作名 Lumen,已更名)。
+> **EasyShow** 为项目名称(早期工作名 Lumen、Liteshow,已更名)。
 > 一句话定位:用 Rust 写一个「秒开、顺滑、够用」的桌面看图工具,一套代码覆盖 Linux / Windows / macOS。
 > 对标参考:qimgv(极轻快)、ImageGlass(功能全)、nomacs —— 取三者交集里"快而美"的那部分。
 > 当前阶段:M1/M2 主体已交付(见 §4 里程碑状态);持续迭代中。
@@ -106,17 +106,17 @@
 ### 3.2 工程结构(Cargo workspace)
 
 ```
-liteshow/
+easyshow/
 ├── Cargo.toml                  # workspace:统一依赖版本;release 开 thin-LTO / strip / codegen-units=1
 ├── crates/
-│   ├── liteshow-core/             # 纯逻辑,零 UI 依赖 → 可做基准测试、可复用
+│   ├── easyshow-core/             # 纯逻辑,零 UI 依赖 → 可做基准测试、可复用
 │   │   ├── codec/              # 格式分发:zune-jpeg 快速路径 + image 兜底
 │   │   ├── resize/             # fast_image_resize 封装(SIMD)
 │   │   ├── exif/               # EXIF 解析、方向校正
 │   │   ├── thumb/              # 缩略图生成管线(并行)
 │   │   ├── cache/              # 磁盘缓存(blake3 指纹)+ 内存 LRU
 │   │   └── index/              # 目录扫描、过滤、排序
-│   └── liteshow-app/              # eframe 应用:UI、输入、状态机
+│   └── easyshow-app/              # eframe 应用:UI、输入、状态机
 │       ├── ui/                 # 工具栏 / 画布 / 胶片条 / 网格 / 信息面板 / 设置
 │       ├── viewer/             # 缩放平移变换、纹理管理、渐进加载状态机
 │       ├── input/              # 快捷键与手势映射
@@ -130,7 +130,7 @@ liteshow/
 |---|---|---|
 | 窗口 / UI / GPU | eframe(egui)+ wgpu | glow 后端作兼容回退;三平台同一套渲染路径 |
 | 解码 | image(裁剪 feature)+ zune-jpeg + image-webp + gif | image 覆盖广;[zune-jpeg](https://github.com/etemesi254/zune-image) 是最快的纯 Rust JPEG 解码器之一,内部已有降采样 IDCT 优化路径 |
-| HEIC 解码 | 运行时加载 libheif(libloading FFI) | 编译期零 C 依赖:首次打开 HEIC 时动态加载系统 libheif,缺失时友好降级(仅该格式不可用)。**发行包默认不随附库文件**(保持轻量);系统提供库时自动启用。已落地于 `liteshow-core::codec::heif` |
+| HEIC 解码 | 运行时加载 libheif(libloading FFI),cargo feature `heic`(默认开) | 编译期零 C 依赖:首次打开 HEIC 时动态加载系统 libheif,缺失时友好降级(仅该格式不可用)。已落地于 `easyshow-core::codec::heif`;**关闭 feature(轻量版 lite)则整套 HEIF 代码编译剔除**(HEIC/AVIF 不再被识别),发行时按 full/lite 两个变体成套出包 |
 | 高质量重采样 | fast_image_resize | AVX2 / NEON SIMD,比 image 内置缩放快数倍 |
 | EXIF | kamadak-exif | 方向、相机参数 |
 | 并行与通道 | rayon + crossbeam-channel | 解码池 + 任务取消(generation id) |
@@ -140,7 +140,7 @@ liteshow/
 | CLI / 配置 / 日志 | clap / serde + toml / tracing | |
 | 打包 | cargo-packager + GitHub Actions | AppImage/deb/rpm、msi/zip、dmg,三平台矩阵 |
 
-默认关闭 `image` 未用的格式 feature 以控制体积。HEIC 与 AVIF 已默认可用(运行时 libheif,编译期零 C 依赖);RAW / JXL 保持 feature 门控。
+默认关闭 `image` 未用的格式 feature 以控制体积。HEIC 与 AVIF 由 `heic` feature 门控(默认开;lite 变体 `--no-default-features` 关闭,连同 libloading 依赖一并剔除);RAW / JXL 另留 feature 位。
 
 ### 3.4 核心机制(为什么快)
 
@@ -172,7 +172,7 @@ liteshow/
 | 缩放 / 平移 | ≥ 60 fps |
 | 空载内存 / 安装包体积 | < 120 MB / < 25 MB(含随附 libheif 动态库) |
 
-liteshow-core 配 criterion 基准(decode / resize / thumbnail),防性能回归。
+easyshow-core 配 criterion 基准(decode / resize / thumbnail),防性能回归。
 
 > **M1 实测**(2026-10,Linux,release 构建):24MP JPEG 整图解码 **104 ms**(zune-jpeg)+ SIMD 降采样 6000×4000 → 2100×1400 **151 ms**(首次调用含 CPU 扩展探测);GUI 三场景(JPEG / HEIC / 24MP 目录)无头截图验证通过,截图见 `docs/screenshots/`。
 
