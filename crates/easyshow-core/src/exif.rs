@@ -92,6 +92,17 @@ pub fn read_gps(path: &Path) -> Option<(f64, f64)> {
     gps_coordinates(&exif)
 }
 
+/// 读取 EXIF 拍摄时间(DateTimeOriginal → DateTimeDigitized → DateTime)。
+/// 返回本地墙钟时间,供时间排序与年/月/日时间轴分组。
+pub fn read_taken_time(path: &Path) -> Option<crate::timeutil::DateTimeParts> {
+    let exif = read_exif(path)?;
+    let field = exif
+        .get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
+        .or_else(|| exif.get_field(exif::Tag::DateTimeDigitized, exif::In::PRIMARY))
+        .or_else(|| exif.get_field(exif::Tag::DateTime, exif::In::PRIMARY))?;
+    crate::timeutil::parse_exif(&field.display_value().to_string())
+}
+
 /// GPS 纬度/经度 → 十进制度(南纬/西经取负)。
 fn gps_coordinates(exif: &exif::Exif) -> Option<(f64, f64)> {
     fn dms(exif: &exif::Exif, tag: exif::Tag) -> Option<f64> {

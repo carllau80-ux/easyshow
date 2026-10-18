@@ -1,10 +1,11 @@
 //! 地图模式:离线世界底图 + 在线瓦片 + 照片缩略图聚合。
 //!
-//! 聚合点直接显示照片微缩图(随缩放级别展示 1 / 4 / 9 张),点开弹层可浏览
+//! 聚合点直接显示照片微缩图(随缩放级别最多展示 1 / 4 张),点开弹层可浏览
 //! 该聚合下的全部照片(按缩略图网格),单击选中、双击进入浏览。
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use eframe::egui::{self, Align2, Color32, CursorIcon, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 
@@ -20,6 +21,11 @@ const CLUSTER_CELL: f32 = 44.0;
 pub const MAX_ZOOM_OFFLINE: f64 = 6.0;
 /// 在线瓦片的最大缩放。
 pub const MAX_ZOOM_ONLINE: f64 = 17.0;
+/// 离线省界底图覆盖范围(与 packaging/tools/chinamap.py 保持一致)。
+pub const CHINA_LON0: f64 = 73.4;
+pub const CHINA_LON1: f64 = 135.2;
+pub const CHINA_LAT0: f64 = 2.6;
+pub const CHINA_LAT1: f64 = 54.0;
 /// 聚合弹层最多展示的照片数。
 const POPUP_LIMIT: usize = 12;
 
@@ -35,6 +41,7 @@ struct MapColors {
     water: Color32,
     land: Color32,
     border: Color32,
+    label: Color32,
     cluster_text: Color32,
 }
 
@@ -44,6 +51,7 @@ fn colors(dark: bool) -> MapColors {
             water: Color32::from_rgb(0x0a, 0x0f, 0x17),
             land: Color32::from_rgb(0x1c, 0x24, 0x31),
             border: Color32::from_rgb(0x37, 0x45, 0x5a),
+            label: Color32::from_rgb(0x94, 0xa3, 0xb8),
             cluster_text: Color32::from_rgb(0xff, 0xff, 0xff),
         }
     } else {
@@ -51,6 +59,7 @@ fn colors(dark: bool) -> MapColors {
             water: Color32::from_rgb(0xd7, 0xe3, 0xef),
             land: Color32::from_rgb(0xfb, 0xfd, 0xff),
             border: Color32::from_rgb(0xb2, 0xc3, 0xd4),
+            label: Color32::from_rgb(0x4a, 0x5a, 0x6e),
             cluster_text: Color32::from_rgb(0x0b, 0x1b, 0x2a),
         }
     }
@@ -72,6 +81,8 @@ fn ensure_world_textures(app: &mut EasyShowApp, ctx: &egui::Context) {
     };
     app.world_land = upload(ctx, "world-land", include_bytes!("../../../assets/world-land.png"));
     app.world_borders = upload(ctx, "world-borders", include_bytes!("../../../assets/world-borders.png"));
+    app.china_land = upload(ctx, "china-land", include_bytes!("../../../assets/china-land.png"));
+    app.china_borders = upload(ctx, "china-borders", include_bytes!("../../../assets/china-borders.png"));
 }
 
 fn draw_world_map(app: &EasyShowApp, painter: &egui::Painter, rect: Rect, colors: &MapColors) {
@@ -85,6 +96,103 @@ fn draw_world_map(app: &EasyShowApp, painter: &egui::Painter, rect: Rect, colors
     );
     painter.image(land.id(), dest, Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)), colors.land);
     painter.image(borders.id(), dest, Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)), colors.border);
+}
+
+/// 离线省界底图:高分中国蒙版(省界/九段线)与省名标注。
+fn draw_china_map(
+    app: &EasyShowApp,
+    painter: &egui::Painter,
+    rect: Rect,
+    colors: &MapColors,
+    lang: crate::i18n::Lang,
+) {
+    let (Some(land), Some(borders)) = (&app.china_land, &app.china_borders) else { return };
+    let size = (rect.width() as f64, rect.height() as f64);
+    let tl = geo::lonlat_to_world((CHINA_LAT1, CHINA_LON0));
+    let br = geo::lonlat_to_world((CHINA_LAT0, CHINA_LON1));
+    let a = app.map.world_to_screen(size, tl);
+    let b = app.map.world_to_screen(size, br);
+    let dest = Rect::from_min_max(
+        egui::pos2(rect.min.x + a.0 as f32, rect.min.y + a.1 as f32),
+        egui::pos2(rect.min.x + b.0 as f32, rect.min.y + b.1 as f32),
+    );
+    if !rect.intersects(dest) {
+        return;
+    }
+    let uv = Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0));
+    painter.image(land.id(), dest, uv, colors.land);
+    painter.image(borders.id(), dest, uv, colors.border);
+
+    if tile_kind(app).is_some() {
+        // 在线底图自带省界与标注,离线层只作为加载期间兜底。
+        return;
+    }
+    painter.text(
+        egui::pos2(rect.right() - 8.0, rect.top() + 8.0),
+        Align2::RIGHT_TOP,
+        tr(lang, Key::ChinaMapAttribution),
+        FontId::proportional(9.5),
+        colors.label.gamma_multiply(0.8),
+    );
+    if app.map.zoom < 4.3 {
+        return;
+    }
+
+    let font_size = (dest.width() / 110.0).clamp(10.0, 15.0);
+    let mut placed: Vec<Pos2> = Vec::new();
+    for label in china_labels() {
+        let p = app
+            .map
+            .world_to_screen(size, geo::lonlat_to_world((label.lat, label.lon)));
+        let pos = egui::pos2(rect.min.x + p.0 as f32, rect.min.y + p.1 as f32);
+        if !rect.shrink(10.0).contains(pos) {
+            continue;
+        }
+        // 简单的标注避让:省名密集处(京津沪、港澳粤)只保留先到者。
+        if placed
+            .iter()
+            .any(|q| (q.x - pos.x).abs() < font_size * 3.2 && (q.y - pos.y).abs() < font_size * 1.15)
+        {
+            continue;
+        }
+        placed.push(pos);
+        painter.text(
+            pos + egui::vec2(0.7, 0.7),
+            Align2::CENTER_CENTER,
+            label.name,
+            FontId::proportional(font_size),
+            Color32::from_black_alpha(120),
+        );
+        painter.text(
+            pos,
+            Align2::CENTER_CENTER,
+            label.name,
+            FontId::proportional(font_size),
+            colors.label,
+        );
+    }
+}
+
+struct ChinaLabel {
+    name: &'static str,
+    lon: f64,
+    lat: f64,
+}
+
+fn china_labels() -> &'static [ChinaLabel] {
+    static LABELS: OnceLock<Vec<ChinaLabel>> = OnceLock::new();
+    LABELS.get_or_init(|| {
+        include_str!("../../../assets/china-provinces.txt")
+            .lines()
+            .filter_map(|line| {
+                let mut it = line.split('|');
+                let name = it.next()?;
+                let lon: f64 = it.next()?.parse().ok()?;
+                let lat: f64 = it.next()?.parse().ok()?;
+                Some(ChinaLabel { name, lon, lat })
+            })
+            .collect()
+    })
 }
 
 /// 当前应使用的瓦片源(联网关闭时为 None)。
@@ -181,15 +289,10 @@ fn collect_clusters(app: &EasyShowApp, rect: Rect, uses_gcj: bool) -> Vec<Screen
 }
 
 /// 聚合点随缩放展示的缩略图数量与网格布局。
-/// 低缩放每簇 1 张;放大后依次展示 4 张、9 张,同时瓦片也会随着缩放逐渐分开。
+/// 低缩放每簇 1 张;放大后最多展示 4 张(2×2),其余用 +N 徽标;
+/// 继续放大会让聚合自然散开成单张缩略图。
 fn cluster_layout(zoom: f64, count: usize) -> (usize, f32, Vec<(f32, f32)>) {
-    let max_tiles = if zoom < 3.0 {
-        1
-    } else if zoom < 4.6 {
-        4
-    } else {
-        9
-    };
+    let max_tiles = if zoom < 3.0 { 1 } else { 4 };
     let shown = count.min(max_tiles).max(1);
     let tile_r = (10.0f32 + ((zoom - 3.0).clamp(0.0, 8.0) as f32) * 1.3).clamp(10.0, 20.0);
     let gap = tile_r * 1.8;
@@ -579,6 +682,7 @@ pub fn map_view(app: &mut EasyShowApp, ui: &mut egui::Ui) {
 
     ensure_world_textures(app, ui.ctx());
     draw_world_map(app, &painter, rect, &map_colors);
+    draw_china_map(app, &painter, rect, &map_colors, lang);
 
     let kind = tile_kind(app);
     match kind {
@@ -648,14 +752,30 @@ pub fn map_view(app: &mut EasyShowApp, ui: &mut egui::Ui) {
             );
         }
     }
-    if kind.is_none() {
-        painter.text(
-            egui::pos2(rect.right() - 8.0, rect.bottom() - 6.0),
-            Align2::RIGHT_BOTTOM,
-            tr(lang, Key::MapOfflineHint),
-            FontId::proportional(10.5),
-            palette.text_dim,
-        );
+    match kind {
+        None => {
+            painter.text(
+                egui::pos2(rect.right() - 8.0, rect.bottom() - 6.0),
+                Align2::RIGHT_BOTTOM,
+                tr(lang, Key::MapOfflineHint),
+                FontId::proportional(10.5),
+                palette.text_dim,
+            );
+        }
+        Some(kind) => {
+            // 在线底图使用条款要求的来源标注。
+            let credit = match kind {
+                TileKind::Amap => "© 高德地图 / DataV.GeoAtlas",
+                TileKind::Osm => "© OpenStreetMap contributors",
+            };
+            painter.text(
+                egui::pos2(rect.right() - 8.0, rect.bottom() - 6.0),
+                Align2::RIGHT_BOTTOM,
+                credit,
+                FontId::proportional(9.5),
+                palette.text_dim,
+            );
+        }
     }
     painter.text(
         egui::pos2(rect.left() + 12.0, rect.bottom() - 8.0),

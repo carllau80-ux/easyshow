@@ -17,6 +17,7 @@ EasyShow 本体采用 MIT OR Apache-2.0。以下为随二进制分发的主要�
 | image-webp | 动画 WebP | MIT / Apache-2.0 |
 | gif(image 的 gif 特性) | 动画 GIF | MIT / Apache-2.0 |
 | Natural Earth / world-atlas | 离线世界地图 | Public Domain / ISC(见 assets/map/LICENSE-world-atlas.txt) |
+| DataV.GeoAtlas(阿里云)/ 高德地图 | 离线中国省界与九段线蒙版、省名标注 | 数据版权归原服务方,仅作低分辨率底图展示;地图界面标注来源 |
 | Phosphor Icons | 工具栏图标 | MIT(见 assets/fonts/LICENSE-Phosphor.txt) |
 
 - `resvg` 系列为 MPL-2.0:本项目以库的形式静态链接使用,**未修改其源码**;其源码可从 crates.io 获取。

@@ -1,0 +1,12 @@
+中国行政区划边界(离线省界底图)
+
+数据来源:DataV.GeoAtlas(阿里云)
+下载地址:https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json
+获取日期:2026-10-18
+
+用途:由 packaging/tools/chinamap.py 渲染为 assets/china-land.png、
+assets/china-borders.png(省界 + 九段线)与 assets/china-provinces.txt
+(省名标注),仅作为低分辨率离线底图展示;地图界面标注数据来源。
+
+边界数据版权归原服务方(DataV.GeoAtlas / 高德地图)所有,
+使用/分发前请遵守其服务条款。

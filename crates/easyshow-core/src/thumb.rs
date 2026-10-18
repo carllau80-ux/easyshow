@@ -6,9 +6,10 @@ use crate::error::{Error, Result};
 use crate::image_buf::ImageBuf;
 
 /// Decode → apply EXIF orientation → downscale so the long edge ≤ `max_edge`.
-/// Vector formats (SVG) are rendered directly at thumbnail size.
+/// Vector formats (SVG) are rendered directly at thumbnail size; HEIC/AVIF
+/// prefer their embedded thumbnail (much faster than decoding the full image).
 pub fn make_thumbnail(path: &Path, max_edge: u32) -> Result<ImageBuf> {
-    let mut image = crate::codec::decode_file_scaled(path, Some((max_edge, max_edge)))?;
+    let mut image = decode_for_thumbnail(path, max_edge)?;
     if let Some(orientation) = crate::exif::orientation_from_file(path) {
         image = crate::exif::apply_orientation(image, orientation);
     }
@@ -19,6 +20,24 @@ pub fn make_thumbnail(path: &Path, max_edge: u32) -> Result<ImageBuf> {
         image = crate::resize::resize_rgba(&image, new_w, new_h)?;
     }
     Ok(image)
+}
+
+/// HEIC/AVIF 优先用容器内嵌缩略图(iPhone 照片通常 320–512px),
+/// 解不出来时回退到正常解码路径。
+fn decode_for_thumbnail(path: &Path, max_edge: u32) -> Result<ImageBuf> {
+    #[cfg(feature = "heic")]
+    {
+        if matches!(
+            crate::codec::detect_format(path),
+            Some(crate::codec::Format::Heif | crate::codec::Format::Avif)
+        ) {
+            match crate::codec::heif::decode_thumbnail(path) {
+                Ok(image) => return Ok(image),
+                Err(e) => log::debug!("heic embedded thumbnail unavailable ({}): {e}", path.display()),
+            }
+        }
+    }
+    crate::codec::decode_file_scaled(path, Some((max_edge, max_edge)))
 }
 
 /// Encode an RGBA buffer as JPEG (used for the thumbnail disk cache).

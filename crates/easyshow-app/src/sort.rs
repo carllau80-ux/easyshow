@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use easyshow_core::from_extension;
+use easyshow_core::timeutil::{from_system_time_local, DateTimeParts};
 
 /// One image file with the metadata needed for sorting and the info panel.
 #[derive(Debug, Clone)]
@@ -17,6 +18,12 @@ pub struct ImageEntry {
     pub created: Option<SystemTime>,
     /// Lowercase extension, for the "type" sort.
     pub ext: String,
+    /// EXIF 拍摄时间(后台扫描填充;None 时回退文件修改时间)。
+    pub taken: Option<DateTimeParts>,
+    /// 修改时间的本地墙钟表示(排序/分组用,避免每次比较都调用 localtime)。
+    pub modified_parts: DateTimeParts,
+    /// 创建时间(缺失回退修改时间)的本地墙钟表示,供时间轴分组复用。
+    pub created_parts: DateTimeParts,
 }
 
 impl ImageEntry {
@@ -29,18 +36,28 @@ impl ImageEntry {
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let created = meta.created().ok();
         Some(Self {
             path,
             size: meta.len(),
-            modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-            created: meta.created().ok(),
+            modified,
+            created,
             ext,
+            taken: None,
+            modified_parts: from_system_time_local(modified),
+            created_parts: from_system_time_local(created.unwrap_or(modified)),
         })
     }
 
     /// Creation time with fallback to modification time.
     pub fn created_or_modified(&self) -> SystemTime {
         self.created.unwrap_or(self.modified)
+    }
+
+    /// 时间轴/时间排序使用的时间:优先 EXIF 拍摄时间,缺失回退本地修改时间。
+    pub fn time_key(&self) -> DateTimeParts {
+        self.taken.unwrap_or(self.modified_parts)
     }
 }
 
@@ -64,6 +81,8 @@ pub fn scan_entries(dir: &Path) -> Vec<ImageEntry> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortKey {
     Name,
+    /// EXIF 拍摄时间(缺失回退修改时间)
+    Taken,
     Modified,
     Created,
     Size,
@@ -74,7 +93,7 @@ impl SortKey {
     /// Sensible default direction when switching to this key:
     /// dates read best newest-first, everything else ascending.
     pub fn default_ascending(self) -> bool {
-        !matches!(self, SortKey::Modified | SortKey::Created)
+        !matches!(self, SortKey::Taken | SortKey::Modified | SortKey::Created)
     }
 }
 
@@ -90,6 +109,7 @@ pub fn sort_entries(entries: &mut [ImageEntry], key: SortKey, ascending: bool) {
 fn compare(a: &ImageEntry, b: &ImageEntry, key: SortKey) -> Ordering {
     match key {
         SortKey::Name => natural_cmp(&file_name(&a.path), &file_name(&b.path)),
+        SortKey::Taken => a.time_key().cmp(&b.time_key()),
         SortKey::Modified => a.modified.cmp(&b.modified),
         SortKey::Created => a.created_or_modified().cmp(&b.created_or_modified()),
         SortKey::Size => a.size.cmp(&b.size),
@@ -159,12 +179,18 @@ mod tests {
 
     fn entry(name: &str, size: u64, secs: u64, created: Option<u64>, ext: &str) -> ImageEntry {
         let t = SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
+        let c = created
+            .map(|s| SystemTime::UNIX_EPOCH + Duration::from_secs(s))
+            .unwrap_or(t);
         ImageEntry {
             path: PathBuf::from(name),
             size,
             modified: t,
             created: created.map(|s| SystemTime::UNIX_EPOCH + Duration::from_secs(s)),
             ext: ext.to_string(),
+            taken: None,
+            modified_parts: from_system_time_local(t),
+            created_parts: from_system_time_local(c),
         }
     }
 

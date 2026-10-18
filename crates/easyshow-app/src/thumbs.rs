@@ -15,10 +15,19 @@ use easyshow_core::ImageBuf;
 pub const THUMB_EDGE: u32 = 160;
 const JPEG_QUALITY: u8 = 80;
 
-pub struct ThumbEvent {
-    pub path: PathBuf,
-    pub generation: u64,
-    pub result: Result<Arc<ImageBuf>, String>,
+pub enum ThumbEvent {
+    Done {
+        path: PathBuf,
+        generation: u64,
+        image: Arc<ImageBuf>,
+    },
+    Failed {
+        path: PathBuf,
+        message: String,
+    },
+    /// 请求因滚出视口/目录切换被跳过——UI 必须清除 inflight,
+    /// 否则该瓦片再次可见时不会重发请求(永远空白)。
+    Skipped { path: PathBuf },
 }
 
 pub struct ThumbService {
@@ -47,21 +56,29 @@ impl ThumbService {
                 .spawn(move || {
                     while let Ok((path, generation)) = req_rx.recv() {
                         if generation < latest.load(Ordering::SeqCst) {
+                            let _ = ev_tx.send(ThumbEvent::Skipped { path });
                             continue; // 目录已切换
                         }
-                        // 已被滚动甩出视口(含预载边距)→ 跳过,先服务当前可见的
+                        // 已被滚动甩出视口(含预载边距)→ 跳过,先服务当前可见的。
+                        // 通知 UI 清除 inflight,滚回来时才能重新请求。
                         let still_wanted = wanted
                             .read()
                             .map(|set| set.contains(&path))
                             .unwrap_or(true);
                         if !still_wanted {
+                            let _ = ev_tx.send(ThumbEvent::Skipped { path });
                             continue;
                         }
                         let result = thumb_one(&path).map(Arc::new);
                         if generation < latest.load(Ordering::SeqCst) {
+                            let _ = ev_tx.send(ThumbEvent::Skipped { path });
                             continue;
                         }
-                        if ev_tx.send(ThumbEvent { path, generation, result }).is_err() {
+                        let event = match result {
+                            Ok(image) => ThumbEvent::Done { path, generation, image },
+                            Err(message) => ThumbEvent::Failed { path, message },
+                        };
+                        if ev_tx.send(event).is_err() {
                             break;
                         }
                     }

@@ -6,7 +6,7 @@ use eframe::egui;
 use crate::app::{display_size, file_name, human_size, upload_thumb_texture, EasyShowApp, Mode};
 use crate::i18n::{tr, Key, Lang};
 use crate::icons;
-use crate::sort::SortKey;
+use crate::sort::{ImageEntry, SortKey};
 use crate::theme::{Palette, ThemeMode};
 use crate::tree::TreeNode;
 use crate::viewer::ZoomMode;
@@ -43,6 +43,7 @@ fn toolbar_sep(ui: &mut egui::Ui) {
 fn sort_label(lang: Lang, key: SortKey) -> &'static str {
     match key {
         SortKey::Name => tr(lang, Key::ByName),
+        SortKey::Taken => tr(lang, Key::ByTaken),
         SortKey::Modified => tr(lang, Key::ByModified),
         SortKey::Created => tr(lang, Key::ByCreated),
         SortKey::Size => tr(lang, Key::BySize),
@@ -262,7 +263,7 @@ pub fn toolbar(app: &mut EasyShowApp, ui: &mut egui::Ui) {
 
             ui.menu_button(icon_text(icons::ARROWS_DOWN_UP), |ui| {
                 ui.set_min_width(190.0);
-                for key in [SortKey::Name, SortKey::Modified, SortKey::Created, SortKey::Size, SortKey::Type] {
+                for key in [SortKey::Taken, SortKey::Name, SortKey::Modified, SortKey::Created, SortKey::Size, SortKey::Type] {
                     let label = sort_label(lang, key);
                     let text = if app.sort_key == key {
                         format!("{}  {label}", icons::CHECK)
@@ -414,130 +415,686 @@ fn render_node(
 // Thumbnail grid (center, Grid mode)
 // ----------------------------------------------------------------------
 
+
 const TILE_W: f32 = 168.0;
 const TILE_H: f32 = 158.0;
 const TILE_GAP: f32 = 10.0;
 const IMG_H: f32 = 132.0;
+const HEADER_YEAR_H: f32 = 38.0;
+const HEADER_MONTH_H: f32 = 28.0;
+const HEADER_DAY_H: f32 = 24.0;
+const RAIL_W: f32 = 116.0;
+
+enum GridNode {
+    Folder(usize),
+    Image(usize),
+}
+
+enum GridRowKind {
+    Tiles(Vec<GridNode>),
+    /// level: 0 = 年, 1 = 月, 2 = 日
+    Header { level: u8, text: String },
+}
+
+struct GridRow {
+    kind: GridRowKind,
+    y: f32,
+    height: f32,
+}
+
+/// 时间轴数据:年/月分组与各标题的内容坐标,供右侧导航条跳转。
+struct GridLayout {
+    rows: Vec<GridRow>,
+    total_h: f32,
+    groups: Vec<(i32, Vec<(u8, usize)>)>,
+    year_y: Vec<(i32, f32)>,
+    month_y: Vec<((i32, u8), f32)>,
+    time_sorted: bool,
+}
+
+fn entry_time_parts(entry: &ImageEntry, key: SortKey) -> easyshow_core::DateTimeParts {
+    match key {
+        SortKey::Taken => entry.time_key(),
+        SortKey::Modified => entry.modified_parts,
+        _ => entry.created_parts,
+    }
+}
+
+fn build_layout(app: &EasyShowApp, cols: usize) -> GridLayout {
+    let mut rows: Vec<GridRow> = Vec::new();
+    let mut y = 0.0f32;
+    let mut groups: Vec<(i32, Vec<(u8, usize)>)> = Vec::new();
+    let mut year_y: Vec<(i32, f32)> = Vec::new();
+    let mut month_y: Vec<((i32, u8), f32)> = Vec::new();
+
+    // 文件夹卡片始终排在最前。
+    let mut i = 0;
+    while i < app.folder_cards.len() {
+        let end = (i + cols).min(app.folder_cards.len());
+        rows.push(GridRow {
+            kind: GridRowKind::Tiles((i..end).map(GridNode::Folder).collect()),
+            y,
+            height: TILE_H + TILE_GAP,
+        });
+        y += TILE_H + TILE_GAP;
+        i = end;
+    }
+
+    let time_sorted = matches!(app.sort_key, SortKey::Taken | SortKey::Modified | SortKey::Created);
+    let zh = app.lang == Lang::Zh;
+    let mut current: Vec<GridNode> = Vec::new();
+    let mut prev: Option<(i32, u8, u8)> = None;
+
+    for (idx, entry) in app.entries.iter().enumerate() {
+        if time_sorted {
+            let parts = entry_time_parts(entry, app.sort_key);
+            let key = (parts.year, parts.month, parts.day);
+            if prev != Some(key) {
+                if !current.is_empty() {
+                    rows.push(GridRow {
+                        kind: GridRowKind::Tiles(std::mem::take(&mut current)),
+                        y,
+                        height: TILE_H + TILE_GAP,
+                    });
+                    y += TILE_H + TILE_GAP;
+                }
+                let year_changed = prev.map(|p| p.0) != Some(key.0);
+                let month_changed = year_changed || prev.map(|p| p.1) != Some(key.1);
+                if year_changed {
+                    year_y.push((key.0, y));
+                    rows.push(GridRow {
+                        kind: GridRowKind::Header {
+                            level: 0,
+                            text: if zh { format!("{} 年", key.0) } else { format!("{}", key.0) },
+                        },
+                        y,
+                        height: HEADER_YEAR_H,
+                    });
+                    y += HEADER_YEAR_H;
+                }
+                if month_changed {
+                    month_y.push(((key.0, key.1), y));
+                    rows.push(GridRow {
+                        kind: GridRowKind::Header {
+                            level: 1,
+                            text: if zh {
+                                format!("{} 月", key.1)
+                            } else {
+                                format!("{}-{:02}", key.0, key.1)
+                            },
+                        },
+                        y,
+                        height: HEADER_MONTH_H,
+                    });
+                    y += HEADER_MONTH_H;
+                    // 同一年内只保留一个分组,月份嵌套在年下面。
+                    if groups.last().map(|(year, _)| *year) != Some(key.0) {
+                        groups.push((key.0, Vec::new()));
+                    }
+                }
+                rows.push(GridRow {
+                    kind: GridRowKind::Header {
+                        level: 2,
+                        text: if zh {
+                            format!("{} 月 {} 日", key.1, key.2)
+                        } else {
+                            format!("{}-{:02}-{:02}", key.0, key.1, key.2)
+                        },
+                    },
+                    y,
+                    height: HEADER_DAY_H,
+                });
+                y += HEADER_DAY_H;
+                prev = Some(key);
+            }
+            if let Some((_, months)) = groups.last_mut() {
+                match months.last_mut() {
+                    Some((month, count)) if *month == key.1 => *count += 1,
+                    _ => months.push((key.1, 1)),
+                }
+            }
+        }
+        current.push(GridNode::Image(idx));
+        if current.len() == cols {
+            rows.push(GridRow {
+                kind: GridRowKind::Tiles(std::mem::take(&mut current)),
+                y,
+                height: TILE_H + TILE_GAP,
+            });
+            y += TILE_H + TILE_GAP;
+        }
+    }
+    if !current.is_empty() {
+        rows.push(GridRow {
+            kind: GridRowKind::Tiles(current),
+            y,
+            height: TILE_H + TILE_GAP,
+        });
+        y += TILE_H + TILE_GAP;
+    }
+
+    GridLayout { rows, total_h: y + 12.0, groups, year_y, month_y, time_sorted }
+}
 
 pub fn grid(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     let lang = app.lang;
-    ui.add_space(8.0);
-    if app.entries.is_empty() {
+    let palette = Palette::for_ui(ui);
+    if app.entries.is_empty() && app.folder_cards.is_empty() {
         ui.vertical_centered(|ui| {
             ui.add_space(90.0);
-            ui.weak(tr(lang, Key::EmptyDir));
+            if app.folders_scanning {
+                ui.spinner();
+                ui.add_space(4.0);
+                ui.weak(tr(lang, Key::FolderScanning));
+            } else {
+                ui.weak(tr(lang, Key::EmptyDir));
+            }
         });
         return;
     }
 
-    let avail = ui.available_width();
-    let cols = (((avail - 8.0 + TILE_GAP) / (TILE_W + TILE_GAP)).floor() as usize).max(1);
+    ui.add_space(8.0);
+    let avail = ui.available_size();
+    let time_sorted = matches!(app.sort_key, SortKey::Taken | SortKey::Modified | SortKey::Created);
+    let rail_w = if time_sorted && !app.entries.is_empty() { RAIL_W } else { 0.0 };
+    let grid_w = (avail.x - rail_w).max(160.0);
+    let cols = ((((grid_w - 8.0) + TILE_GAP) / (TILE_W + TILE_GAP)).floor() as usize).max(1);
     app.grid_cols = cols;
-    let rows = app.entries.len().div_ceil(cols);
-    let row_h = TILE_H + TILE_GAP;
+    let layout = build_layout(app, cols);
 
     let mut select_idx: Option<(usize, bool, bool)> = None;
     let mut open_idx: Option<usize> = None;
+    let mut select_folder: Option<usize> = None;
+    let mut open_folder: Option<usize> = None;
     let mut to_request: Vec<std::path::PathBuf> = Vec::new();
     let mut to_upload: Vec<std::path::PathBuf> = Vec::new();
     let mut wanted: Vec<std::path::PathBuf> = Vec::new();
     let (ctrl, shift) = ui.input(|i| (i.modifiers.ctrl || i.modifiers.command, i.modifiers.shift));
-    let palette = Palette::for_ui(ui);
-    let (card_bg, thumb_bg, text_dim, accent) = (palette.card_bg, palette.thumb_bg, palette.text_dim, palette.accent);
+    let mut scroll_offset = 0.0f32;
 
-    egui::ScrollArea::vertical()
-        .auto_shrink(false)
-        .show_rows(ui, row_h, rows, |ui, row_range| {
-            ui.spacing_mut().item_spacing = egui::vec2(TILE_GAP, TILE_GAP);
-            // 视口优先:可见区上下各 2 行也标记为"应优先解析",
-            // 缩略图线程会跳过被滚动甩出的排队项 —— 拖到哪里就解析哪里。
-            const PRELOAD_ROWS: usize = 2;
-            let margin_start = row_range.start.saturating_sub(PRELOAD_ROWS);
-            let margin_end = (row_range.end + PRELOAD_ROWS).min(rows);
-            for row in margin_start..margin_end {
-                for col in 0..cols {
-                    let idx = row * cols + col;
-                    let Some(entry) = app.entries.get(idx) else { break };
-                    let path = entry.path.clone();
-                    wanted.push(path.clone());
-                    if !app.thumb_imgs.contains_key(&path) {
-                        to_request.push(path);
-                    }
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(grid_w, avail.y),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                let mut scroll = egui::ScrollArea::vertical()
+                    .id_salt("grid-scroll")
+                    .auto_shrink(false);
+                if let Some(y) = app.grid_scroll_to.take() {
+                    scroll = scroll.vertical_scroll_offset(y);
                 }
-            }
-            for row in row_range {
-                ui.horizontal(|ui| {
-                    for col in 0..cols {
-                        let idx = row * cols + col;
-                        let Some(entry) = app.entries.get(idx) else { break };
-                        let path = entry.path.clone();
-                        let (rect, response) = ui.allocate_exact_size(egui::vec2(TILE_W, TILE_H), egui::Sense::click());
-                        let painter = ui.painter().clone();
+                let output = scroll.show_viewport(ui, |ui, viewport| {
+                    // 底部留一屏空白,保证最后一个月也能滚动到视口顶部。
+                    ui.set_height(layout.total_h + (viewport.max.y - viewport.min.y));
+                    let left = ui.max_rect().left();
+                    let top = ui.max_rect().top();
+                    let width = ui.max_rect().width();
 
-                        painter.rect_filled(rect, egui::CornerRadius::same(8), card_bg);
-                        let img_rect = egui::Rect::from_min_size(
-                            rect.min + egui::vec2(4.0, 4.0),
-                            egui::vec2(TILE_W - 8.0, IMG_H),
-                        );
-                        painter.rect_filled(img_rect, egui::CornerRadius::same(6), thumb_bg);
-                        if let Some(texture) = app.thumb_tex.get(&path) {
-                            draw_fitted(&painter, texture.id(), img_rect, texture.size_vec2());
-                        } else if app.thumb_imgs.contains_key(&path) {
-                            to_upload.push(path.clone());
-                        } else {
-                            to_request.push(path.clone());
-                        }
 
-                        let name = elide(&file_name(&path), 20);
-                        painter.text(
-                            rect.center_bottom() - egui::vec2(0.0, 12.0),
-                            egui::Align2::CENTER_CENTER,
-                            name,
-                            egui::FontId::proportional(11.5),
-                            text_dim,
-                        );
-                        let primary = app.nav_order.get(app.selected).copied() == Some(idx);
-                        if primary {
-                            painter.rect_stroke(
-                                rect,
-                                egui::CornerRadius::same(8),
-                                egui::Stroke::new(2.0, accent),
-                                egui::StrokeKind::Inside,
-                            );
-                        } else if app.selection.contains(&idx) {
-                            painter.rect_stroke(
-                                rect,
-                                egui::CornerRadius::same(8),
-                                egui::Stroke::new(1.5, accent.gamma_multiply(0.6)),
-                                egui::StrokeKind::Inside,
-                            );
+                    // 视口上下各 2 行作为预载范围;缩略图线程会丢弃被甩出的排队项。
+                    const PRELOAD_ROWS: usize = 2;
+                    let pre_first = layout
+                        .rows
+                        .partition_point(|r| r.y + r.height < viewport.min.y)
+                        .saturating_sub(PRELOAD_ROWS);
+                    let pre_last = layout
+                        .rows
+                        .partition_point(|r| r.y <= viewport.max.y)
+                        .saturating_add(PRELOAD_ROWS)
+                        .min(layout.rows.len());
+                    for row in &layout.rows[pre_first..pre_last] {
+                        let GridRowKind::Tiles(nodes) = &row.kind else { continue };
+                        for node in nodes {
+                            match node {
+                                GridNode::Image(idx) => {
+                                    let path = app.entries[*idx].path.clone();
+                                    wanted.push(path);
+                                }
+                                GridNode::Folder(fi) => {
+                                    if let Some(cover) = app.folder_cards[*fi].cover.clone() {
+                                        wanted.push(cover);
+                                    }
+                                }
+                            }
                         }
-                        if response.double_clicked() {
-                            open_idx = Some(idx);
-                        } else if response.clicked() {
-                            select_idx = Some((idx, ctrl, shift));
+                    }
+
+                    let first = layout
+                        .rows
+                        .partition_point(|r| r.y + r.height < viewport.min.y);
+                    let last = layout.rows.partition_point(|r| r.y <= viewport.max.y);
+                    for row in &layout.rows[first..last] {
+                        match &row.kind {
+                            GridRowKind::Tiles(nodes) => {
+                                for (col, node) in nodes.iter().enumerate() {
+                                    let rect = egui::Rect::from_min_size(
+                                        egui::pos2(
+                                            left + col as f32 * (TILE_W + TILE_GAP),
+                                            top + row.y,
+                                        ),
+                                        egui::vec2(TILE_W, TILE_H),
+                                    );
+                                    match node {
+                                        GridNode::Image(idx) => {
+                                            let primary =
+                                                app.nav_order.get(app.selected).copied() == Some(*idx);
+                                            let response = draw_photo_tile(
+                                                ui,
+                                                app,
+                                                rect,
+                                                *idx,
+                                                primary,
+                                                app.selection.contains(idx),
+                                                &mut to_request,
+                                                &mut to_upload,
+                                            );
+                                            if response.double_clicked() {
+                                                open_idx = Some(*idx);
+                                            } else if response.clicked() {
+                                                select_idx = Some((*idx, ctrl, shift));
+                                            }
+                                        }
+                                        GridNode::Folder(fi) => {
+                                            let response = draw_folder_tile(
+                                                ui,
+                                                app,
+                                                rect,
+                                                *fi,
+                                                app.selected_folder == Some(*fi),
+                                                lang,
+                                                &mut to_request,
+                                                &mut to_upload,
+                                            );
+                                            if response.double_clicked() {
+                                                open_folder = Some(*fi);
+                                            } else if response.clicked() {
+                                                select_folder = Some(*fi);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            GridRowKind::Header { level, text } => {
+                                let color = match level {
+                                    0 => ui.visuals().text_color(),
+                                    1 => ui.visuals().text_color().gamma_multiply(0.9),
+                                    _ => palette.text_dim,
+                                };
+                                let font = match level {
+                                    0 => egui::FontId::proportional(15.0),
+                                    1 => egui::FontId::proportional(13.0),
+                                    _ => egui::FontId::proportional(11.5),
+                                };
+                                let rect = egui::Rect::from_min_size(
+                                    egui::pos2(left, top + row.y),
+                                    egui::vec2(width, row.height),
+                                );
+                                ui.painter().text(
+                                    rect.left_center() + egui::vec2(10.0, 0.0),
+                                    egui::Align2::LEFT_CENTER,
+                                    text,
+                                    font,
+                                    color,
+                                );
+                                if *level < 2 {
+                                    let line_y = rect.bottom() - 0.5;
+                                    ui.painter().line_segment(
+                                        [
+                                            egui::pos2(rect.left() + 8.0, line_y),
+                                            egui::pos2(rect.right() - 8.0, line_y),
+                                        ],
+                                        egui::Stroke::new(1.0, palette.text_dim.gamma_multiply(0.18)),
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // 吸顶年月标题:最近一条位于视口上方的月标题。
+                    if layout.time_sorted {
+                        let mut sticky_year: Option<&str> = None;
+                        let mut sticky_month: Option<&str> = None;
+                        for row in &layout.rows[..last] {
+                            if row.y > viewport.min.y {
+                                break;
+                            }
+                            if let GridRowKind::Header { level, text } = &row.kind {
+                                match level {
+                                    0 => {
+                                        sticky_year = Some(text);
+                                        sticky_month = None;
+                                    }
+                                    1 => sticky_month = Some(text),
+                                    _ => {}
+                                }
+                            }
+                        }
+                        if let Some(year) = sticky_year {
+                            let label = match sticky_month {
+                                Some(month) => format!("{year}  ·  {month}"),
+                                None => year.to_string(),
+                            };
+                            let bar = egui::Rect::from_min_size(
+                                egui::pos2(left, top + viewport.min.y),
+                                egui::vec2(width, 26.0),
+                            );
+                            ui.painter().rect_filled(bar, 0.0, palette.canvas_bg);
+                            ui.painter().text(
+                                bar.left_center() + egui::vec2(10.0, 0.0),
+                                egui::Align2::LEFT_CENTER,
+                                label,
+                                egui::FontId::proportional(12.0),
+                                palette.text_dim,
+                            );
+                            ui.painter().line_segment(
+                                [bar.left_bottom(), bar.right_bottom()],
+                                egui::Stroke::new(1.0, palette.text_dim.gamma_multiply(0.25)),
+                            );
                         }
                     }
                 });
-            }
-        });
+                scroll_offset = output.state.clamped_offset().y;
+            },
+        );
+        if rail_w > 0.0 {
+            ui.allocate_ui_with_layout(
+                egui::vec2(rail_w, avail.y),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| draw_timeline(app, ui, &layout, scroll_offset),
+            );
+        }
+    });
 
-    app.set_visible_thumbs(wanted);
-    if let Some((idx, ctrl, shift)) = select_idx {
-        app.select_with(idx, ctrl, shift);
-    }
-    if let Some(idx) = open_idx {
-        app.select_with(idx, false, false);
-        app.open_selected_in_viewer(ui.ctx());
-    }
-    for path in to_upload {
-        if let Some(image) = app.thumb_imgs.get(&path) {
-            let texture = upload_thumb_texture(ui.ctx(), image);
-            app.thumb_tex.insert(path, texture);
+    if open_folder.is_none() {
+        app.set_visible_thumbs(wanted);
+        if let Some(fi) = select_folder {
+            app.selected_folder = Some(fi);
+            app.selection.clear();
+        }
+        if let Some((idx, ctrl, shift)) = select_idx {
+            app.select_with(idx, ctrl, shift);
+        }
+        if let Some(idx) = open_idx {
+            app.select_with(idx, false, false);
+            app.open_selected_in_viewer(ui.ctx());
+        }
+        for path in to_upload {
+            if let Some(image) = app.thumb_imgs.get(&path) {
+                let texture = upload_thumb_texture(ui.ctx(), image);
+                app.thumb_tex.insert(path, texture);
+            }
+        }
+        for path in to_request {
+            app.request_thumb(&path);
         }
     }
-    for path in to_request {
-        app.request_thumb(&path);
+    if let Some(fi) = open_folder {
+        if let Some(card) = app.folder_cards.get(fi) {
+            let dir = card.dir.clone();
+            app.open_dir(ui.ctx(), dir, None, Mode::Grid);
+        }
+    }
+}
+
+fn draw_photo_tile(
+    ui: &egui::Ui,
+    app: &EasyShowApp,
+    rect: egui::Rect,
+    index: usize,
+    primary: bool,
+    selected: bool,
+    to_request: &mut Vec<std::path::PathBuf>,
+    to_upload: &mut Vec<std::path::PathBuf>,
+) -> egui::Response {
+    let palette = Palette::for_ui(ui);
+    let (card_bg, thumb_bg, text_dim, accent) =
+        (palette.card_bg, palette.thumb_bg, palette.text_dim, palette.accent);
+    let painter = ui.painter();
+    let entry = &app.entries[index];
+    let path = &entry.path;
+
+    painter.rect_filled(rect, egui::CornerRadius::same(8), card_bg);
+    let img_rect = egui::Rect::from_min_size(
+        rect.min + egui::vec2(4.0, 4.0),
+        egui::vec2(TILE_W - 8.0, IMG_H),
+    );
+    painter.rect_filled(img_rect, egui::CornerRadius::same(6), thumb_bg);
+    if let Some(texture) = app.thumb_tex.get(path) {
+        draw_fitted(painter, texture.id(), img_rect, texture.size_vec2());
+    } else if app.thumb_imgs.contains_key(path) {
+        to_upload.push(path.clone());
+    } else {
+        to_request.push(path.clone());
+    }
+
+    let name = elide(&file_name(path), 20);
+    painter.text(
+        rect.center_bottom() - egui::vec2(0.0, 12.0),
+        egui::Align2::CENTER_CENTER,
+        name,
+        egui::FontId::proportional(11.5),
+        text_dim,
+    );
+    if primary {
+        painter.rect_stroke(
+            rect,
+            egui::CornerRadius::same(8),
+            egui::Stroke::new(2.0, accent),
+            egui::StrokeKind::Inside,
+        );
+    } else if selected {
+        painter.rect_stroke(
+            rect,
+            egui::CornerRadius::same(8),
+            egui::Stroke::new(1.5, accent.gamma_multiply(0.6)),
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    let response = ui.interact(rect, ui.make_persistent_id(("grid-img", index)), egui::Sense::click());
+    response.on_hover_text(file_name(path))
+}
+
+fn draw_folder_tile(
+    ui: &egui::Ui,
+    app: &EasyShowApp,
+    rect: egui::Rect,
+    folder_index: usize,
+    selected: bool,
+    lang: Lang,
+    to_request: &mut Vec<std::path::PathBuf>,
+    to_upload: &mut Vec<std::path::PathBuf>,
+) -> egui::Response {
+    let card = &app.folder_cards[folder_index];
+    let palette = Palette::for_ui(ui);
+    let painter = ui.painter();
+    painter.rect_filled(rect, egui::CornerRadius::same(8), palette.card_bg);
+    let img_rect = egui::Rect::from_min_size(
+        rect.min + egui::vec2(4.0, 4.0),
+        egui::vec2(TILE_W - 8.0, IMG_H),
+    );
+    painter.rect_filled(img_rect, egui::CornerRadius::same(6), palette.thumb_bg);
+
+    let mut has_cover = false;
+    if let Some(cover) = &card.cover {
+        if let Some(texture) = app.thumb_tex.get(cover) {
+            draw_fitted(painter, texture.id(), img_rect, texture.size_vec2());
+            has_cover = true;
+        } else if app.thumb_imgs.contains_key(cover) {
+            to_upload.push(cover.clone());
+        } else {
+            to_request.push(cover.clone());
+        }
+    }
+    if !has_cover {
+        // 封面尚未就绪时的占位:一个简洁的文件夹形状。
+        let center = img_rect.center();
+        let fw = 38.0;
+        let fh = 28.0;
+        let fg = palette.text_dim.gamma_multiply(0.4);
+        let body = egui::Rect::from_min_size(
+            egui::pos2(center.x - fw / 2.0, center.y - fh / 2.0 + 3.0),
+            egui::vec2(fw, fh - 3.0),
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(body.left(), body.top() - 4.0),
+                egui::vec2(fw * 0.45, 6.0),
+            ),
+            egui::CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 },
+            fg,
+        );
+        painter.rect_filled(body, egui::CornerRadius::same(3), fg);
+    }
+
+    // 左上角文件夹徽标
+    let badge = egui::Rect::from_min_size(img_rect.min + egui::vec2(7.0, 7.0), egui::vec2(25.0, 22.0));
+    painter.rect_filled(badge, egui::CornerRadius::same(5), egui::Color32::from_black_alpha(150));
+    painter.text(
+        badge.center(),
+        egui::Align2::CENTER_CENTER,
+        icons::FOLDER,
+        egui::FontId::proportional(14.0),
+        egui::Color32::WHITE,
+    );
+
+    // 右下角照片数量
+    let count_text = card.photo_count.to_string();
+    let galley = painter.layout_no_wrap(
+        count_text,
+        egui::FontId::proportional(10.5),
+        egui::Color32::WHITE,
+    );
+    let pill = egui::Rect::from_min_size(
+        egui::pos2(
+            img_rect.right() - galley.size().x - 16.0,
+            img_rect.bottom() - galley.size().y - 11.0,
+        ),
+        galley.size() + egui::vec2(10.0, 5.0),
+    );
+    painter.rect_filled(pill, egui::CornerRadius::same(4), egui::Color32::from_black_alpha(150));
+    painter.galley(pill.min + egui::vec2(5.0, 2.5), galley, egui::Color32::WHITE);
+
+    painter.text(
+        rect.center_bottom() - egui::vec2(0.0, 12.0),
+        egui::Align2::CENTER_CENTER,
+        elide(&card.name, 20),
+        egui::FontId::proportional(11.5),
+        palette.text_dim,
+    );
+    if selected {
+        painter.rect_stroke(
+            rect,
+            egui::CornerRadius::same(8),
+            egui::Stroke::new(2.0, palette.accent),
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    let response =
+        ui.interact(rect, ui.make_persistent_id(("grid-folder", folder_index)), egui::Sense::click());
+    let words = tr(lang, Key::FolderHint).replace("{n}", &card.photo_count.to_string());
+    response.on_hover_text(words)
+}
+
+fn draw_timeline(app: &mut EasyShowApp, ui: &mut egui::Ui, layout: &GridLayout, offset: f32) {
+    let lang = app.lang;
+    let palette = Palette::for_ui(ui);
+    let dim = palette.text_dim;
+    let accent = palette.accent;
+
+    // 当前年月:优先取视口顶部下方 140px 内的月标题(刚开始进入该月),
+    // 否则取视口上方最近的月标题。
+    let prev = layout
+        .month_y
+        .iter()
+        .rev()
+        .find(|(_, y)| *y <= offset + 1.0)
+        .map(|(key, _)| *key);
+    let next = layout
+        .month_y
+        .iter()
+        .find(|(_, y)| *y >= offset - 1.0)
+        .map(|(key, y)| (*key, *y));
+    let active = match next {
+        _ if prev.is_none() => next.map(|(key, _)| key),
+        Some((key, y)) if y - offset < 140.0 => Some(key),
+        _ => prev,
+    };
+
+    ui.painter().vline(
+        ui.max_rect().left(),
+        ui.max_rect().y_range(),
+        egui::Stroke::new(1.0, dim.gamma_multiply(0.2)),
+    );
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        ui.label(egui::RichText::new(tr(lang, Key::Timeline)).size(11.0).color(dim));
+    });
+    ui.add_space(4.0);
+
+    let mut clicked: Option<f32> = None;
+    egui::ScrollArea::vertical()
+        .id_salt("timeline-rail")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            for (year, months) in &layout.groups {
+                let year_active = active.map(|(y, _)| y == *year).unwrap_or(false);
+                let year_color = if year_active { accent } else { dim };
+                let response = ui.add(
+                    egui::Button::new(
+                        egui::RichText::new(year.to_string())
+                            .size(12.0)
+                            .strong()
+                            .color(year_color),
+                    )
+                    .frame(false)
+                    .min_size(egui::vec2(100.0, 20.0)),
+                );
+                if response.clicked() {
+                    clicked = layout
+                        .year_y
+                        .iter()
+                        .find(|(y, _)| y == year)
+                        .map(|(_, y)| *y);
+                }
+                for (month, count) in months {
+                    ui.horizontal(|ui| {
+                        ui.add_space(12.0);
+                        let is_active = active == Some((*year, *month));
+                        let color = if is_active { accent } else { dim };
+                        let label = if lang == Lang::Zh {
+                            format!("{month:02} 月")
+                        } else {
+                            format!("{month:02}")
+                        };
+                        let response = ui.add(
+                            egui::Button::new(egui::RichText::new(label).size(11.0).color(color))
+                                .frame(false),
+                        );
+                        if response.clicked() {
+                            clicked = layout
+                                .month_y
+                                .iter()
+                                .find(|(key, _)| key == &(*year, *month))
+                                .map(|(_, y)| *y);
+                        }
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.add_space(8.0);
+                                ui.weak(egui::RichText::new(count.to_string()).size(9.5));
+                            },
+                        );
+                    });
+                }
+            }
+        });
+    if let Some(y) = clicked {
+        app.grid_scroll_to = Some(y);
     }
 }
 
@@ -649,6 +1206,25 @@ pub fn info_panel(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     ui.add_space(8.0);
     ui.label(egui::RichText::new(tr(lang, Key::Info)).strong());
     ui.add_space(2.0);
+    if let Some(card) = app.selected_folder.and_then(|i| app.folder_cards.get(i)) {
+        ui.add(egui::Label::new(&card.name).truncate());
+        ui.add_space(6.0);
+        ui.weak(format!("{} {}", card.photo_count, tr(lang, Key::Photos)));
+        let when = easyshow_core::timeutil::from_system_time_local(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(card.latest_mtime),
+        );
+        kv(
+            ui,
+            tr(lang, Key::Modified),
+            format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}",
+                when.year, when.month, when.day, when.hour, when.minute
+            ),
+        );
+        ui.add_space(8.0);
+        ui.weak(tr(lang, Key::DoubleClickEnter));
+        return;
+    }
     let Some(info) = &app.info else {
         ui.weak("—");
         return;
@@ -737,7 +1313,11 @@ fn kv(ui: &mut egui::Ui, label: &str, value: String) {
 pub fn status(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     let lang = app.lang;
     ui.horizontal(|ui| {
-        if let Some(info) = &app.info {
+        if let Some(card) = app.selected_folder.and_then(|i| app.folder_cards.get(i)) {
+            ui.label(&card.name);
+            ui.weak(format!("{} {}", card.photo_count, tr(lang, Key::Photos)));
+            ui.weak(tr(lang, Key::DoubleClickEnter));
+        } else if let Some(info) = &app.info {
             ui.label(file_name(&info.path));
             ui.weak(format!("{} / {}", app.selected + 1, app.nav_order.len()));
             if app.selection.len() > 1 {
@@ -784,6 +1364,14 @@ pub fn status(app: &mut EasyShowApp, ui: &mut egui::Ui) {
             #[cfg(feature = "formats")]
             if app.anim_active() {
                 ui.weak(format!("● {}", tr(lang, Key::Animated)));
+            }
+            if app.time_scanned < app.time_total {
+                ui.weak(format!(
+                    "{} {}/{}",
+                    tr(lang, Key::TimeScanning),
+                    app.time_scanned,
+                    app.time_total
+                ));
             }
             if app.is_slideshow() {
                 ui.weak(format!("▶ {}", tr(lang, Key::Slideshow)));

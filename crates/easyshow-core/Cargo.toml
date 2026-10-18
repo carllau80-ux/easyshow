@@ -13,6 +13,7 @@ kamadak-exif = { workspace = true }
 libloading = { workspace = true, optional = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+libc = "0.2"
 # 扩展格式(full 版):JPEG XL / SVG / PSD
 jxl-oxide = { workspace = true, optional = true }
 resvg = { workspace = true, optional = true }

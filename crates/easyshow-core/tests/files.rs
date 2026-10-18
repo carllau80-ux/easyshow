@@ -7,6 +7,18 @@ fn testdata(name: &str) -> PathBuf {
 }
 
 #[test]
+fn reads_taken_time_from_exif() {
+    let jpeg = testdata("exif-sample.jpg");
+    if !jpeg.exists() {
+        eprintln!("skip: {} missing", jpeg.display());
+        return;
+    }
+    let t = easyshow_core::read_taken_time(&jpeg).expect("jpeg taken time");
+    assert!(t.is_valid());
+    assert!(t.year >= 2000);
+}
+
+#[test]
 fn decodes_and_downscales_24mp_jpeg() {
     let path = testdata("big-24mp.jpg");
     if !path.exists() {
@@ -145,4 +157,19 @@ fn reads_extended_dimensions() {
             "{name}"
         );
     }
+}
+
+#[cfg(feature = "heic")]
+#[test]
+fn heic_embedded_thumbnail_decodes() {
+    let path = testdata("sample-thumb.heic");
+    if !path.exists() || !easyshow_core::codec::heif::is_available() {
+        eprintln!("skip: fixture or libheif unavailable");
+        return;
+    }
+    let thumb = easyshow_core::codec::heif::decode_thumbnail(&path).expect("embedded thumbnail");
+    let full = easyshow_core::decode_file(&path).expect("full decode");
+    assert!(thumb.width < full.width && thumb.height < full.height,
+        "thumb {}x{} should be smaller than full {}x{}", thumb.width, thumb.height, full.width, full.height);
+    assert_eq!(thumb.rgba.len(), thumb.width as usize * thumb.height as usize * 4);
 }

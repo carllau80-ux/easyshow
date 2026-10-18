@@ -12,6 +12,7 @@ use easyshow_core::{ExifSummary, ImageBuf};
 
 use crate::config::{self, NetConfig, TileSource};
 use crate::decode::{DecodeEvent, DecodeService, Purpose};
+use crate::folders::{FolderCard, FolderService};
 use crate::geocode::{GeocodeService, Place};
 use crate::geo_scan::{GeoScanService, ScanItem};
 use crate::i18n::{tr, Key, Lang};
@@ -109,6 +110,8 @@ pub struct EasyShowApp {
     pub thumb_tex: HashMap<PathBuf, egui::TextureHandle>,
     thumb_order: VecDeque<PathBuf>,
     thumb_inflight: HashSet<PathBuf>,
+    /// 解码失败的缩略图(本次目录会话不再重试,避免坏文件反复占用工作线程)。
+    thumb_failed: HashSet<PathBuf>,
     thumb_generation: u64,
     last_thumb_wanted: Vec<PathBuf>,
     // --- info panel ---
@@ -144,6 +147,21 @@ pub struct EasyShowApp {
     pub geo_scanned: usize,
     pub geo_total: usize,
     geo_fitted: bool,
+    // --- EXIF 拍摄时间(时间排序 / 时间轴) ---
+    time_scan: crate::time_scan::TimeScanService,
+    time_scan_generation: u64,
+    time_scan_dir: Option<PathBuf>,
+    pub time_scanned: usize,
+    pub time_total: usize,
+    // --- 子目录卡片 ---
+    pub folder_cards: Vec<FolderCard>,
+    folders: FolderService,
+    folder_generation: u64,
+    folder_scan_dir: Option<PathBuf>,
+    pub folders_scanning: bool,
+    pub selected_folder: Option<usize>,
+    /// 时间轴跳转:下一帧把网格滚动到该内容 Y 坐标。
+    pub grid_scroll_to: Option<f32>,
     pub(crate) tiles: TileService,
     pub tile_tex: HashMap<(TileKind, TileKey), egui::TextureHandle>,
     tile_order: VecDeque<(TileKind, TileKey)>,
@@ -152,6 +170,9 @@ pub struct EasyShowApp {
     pub(crate) tile_generation: u64,
     pub world_land: Option<egui::TextureHandle>,
     pub world_borders: Option<egui::TextureHandle>,
+    /// 离线中国省界底图(高分蒙版,与国界/陆地同一套 tint)。
+    pub china_land: Option<egui::TextureHandle>,
+    pub china_borders: Option<egui::TextureHandle>,
     pub world_map_loaded: bool,
     /// 地图上聚合点的缩略图弹层。
     pub map_popup: Option<crate::map::MapPopup>,
@@ -322,8 +343,8 @@ impl EasyShowApp {
             selection_anchor: 0,
             mode: Mode::Grid,
             grid_cols: 4,
-            sort_key: SortKey::Name,
-            sort_asc: true,
+            sort_key: SortKey::Modified,
+            sort_asc: false,
             wheel_navigates: false,
             pending_wheel_units: 0.0,
             zoom_accum: 0.0,
@@ -337,11 +358,12 @@ impl EasyShowApp {
             generation: 0,
             prefetch: HashMap::new(),
             prefetch_order: VecDeque::new(),
-            thumbs: ThumbService::new(2),
+            thumbs: ThumbService::new(3),
             thumb_imgs: HashMap::new(),
             thumb_tex: HashMap::new(),
             thumb_order: VecDeque::new(),
             thumb_inflight: HashSet::new(),
+            thumb_failed: HashSet::new(),
             thumb_generation: 0,
             last_thumb_wanted: Vec::new(),
             info: None,
@@ -370,6 +392,18 @@ impl EasyShowApp {
             geo_scanned: 0,
             geo_total: 0,
             geo_fitted: false,
+            time_scan: crate::time_scan::TimeScanService::new(),
+            time_scan_generation: 0,
+            time_scan_dir: None,
+            time_scanned: 0,
+            time_total: 0,
+            folder_cards: Vec::new(),
+            folders: FolderService::new(),
+            folder_generation: 0,
+            folder_scan_dir: None,
+            folders_scanning: false,
+            selected_folder: None,
+            grid_scroll_to: None,
             tiles: TileService::new(),
             tile_tex: HashMap::new(),
             tile_order: VecDeque::new(),
@@ -378,6 +412,8 @@ impl EasyShowApp {
             tile_generation: 0,
             world_land: None,
             world_borders: None,
+            china_land: None,
+            china_borders: None,
             world_map_loaded: false,
             map_popup: None,
             #[cfg(feature = "formats")]
@@ -433,12 +469,22 @@ impl EasyShowApp {
         self.stop_anim();
         self.thumb_generation += 1;
         self.thumb_inflight.clear();
+        self.thumb_failed.clear();
         // 目录切换:重置地图/地名状态(位置扫描在进入地图模式时按需启动)
         self.geo_points.clear();
         self.geo_scanned = 0;
         self.geo_total = 0;
         self.geo_scan_dir = None;
         self.geo_fitted = false;
+        self.time_scan_dir = None;
+        self.time_scanned = 0;
+        self.time_total = 0;
+        self.folder_cards.clear();
+        self.folder_generation = 0;
+        self.folder_scan_dir = None;
+        self.folders_scanning = false;
+        self.selected_folder = None;
+        self.grid_scroll_to = None;
         self.place = None;
         self.place_loading = false;
         self.map_popup = None;
@@ -448,6 +494,11 @@ impl EasyShowApp {
         self.tile_failed.clear();
         self.tile_generation = self.tiles.bump_generation();
         self.tiles.clear_wanted();
+        // 缺省按文件日期排序;EXIF 拍摄时间在用户切换时才扫描(首次较慢)。
+        if self.sort_key == SortKey::Taken {
+            self.start_time_scan();
+        }
+        self.start_folder_scan();
         self.mode = mode;
         self.error = None;
         self.tree_root.expand_to(&dir);
@@ -573,6 +624,7 @@ impl EasyShowApp {
         if index >= self.entries.len() {
             return;
         }
+        self.selected_folder = None;
         self.ensure_identity_order();
         self.slideshow = None;
         if shift {
@@ -600,6 +652,7 @@ impl EasyShowApp {
     }
 
     pub fn select_all(&mut self) {
+        self.selected_folder = None;
         self.ensure_identity_order();
         self.slideshow = None;
         self.selection = (0..self.entries.len()).collect();
@@ -664,13 +717,18 @@ impl EasyShowApp {
 
     /// 选择排序键;对同一个键再次调用则切换升/降序。
     pub fn set_sort(&mut self, key: SortKey) {
-        if self.sort_key == key {
+        let changed = self.sort_key != key;
+        if !changed {
             self.sort_asc = !self.sort_asc;
         } else {
             self.sort_key = key;
             self.sort_asc = key.default_ascending();
         }
         self.apply_sort_keep_selection();
+        // 拍摄时间需要逐张读 EXIF:只有真正用到时才启动后台扫描。
+        if changed && key == SortKey::Taken && self.time_scan_dir.as_ref() != Some(&self.current_dir) {
+            self.start_time_scan();
+        }
     }
 
     pub fn toggle_sort_direction(&mut self) {
@@ -1061,6 +1119,114 @@ impl EasyShowApp {
     }
 
     // ------------------------------------------------------------------
+    // EXIF 拍摄时间(时间排序 / 时间轴)
+    // ------------------------------------------------------------------
+
+    fn start_time_scan(&mut self) {
+        self.time_scan_dir = Some(self.current_dir.clone());
+        self.time_scanned = 0;
+        self.time_total = self.entries.len();
+        let items: Vec<crate::time_scan::ScanItem> = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| crate::time_scan::ScanItem {
+                index,
+                path: entry.path.clone(),
+                mtime: entry
+                    .modified
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            })
+            .collect();
+        self.time_scan_generation = self.time_scan.start(self.current_dir.clone(), items);
+    }
+
+    fn start_folder_scan(&mut self) {
+        self.folder_scan_dir = Some(self.current_dir.clone());
+        self.folder_cards.clear();
+        self.folders_scanning = true;
+        self.folder_generation = self.folders.start(self.current_dir.clone());
+    }
+
+    fn poll_folders(&mut self) {
+        while let Some(event) = self.folders.try_recv() {
+            if event.generation != self.folder_generation {
+                continue;
+            }
+            self.folder_cards.extend(event.cards);
+            if event.done {
+                self.folders_scanning = false;
+                // 最近有照片的文件夹排在前面,其余按名称
+                self.folder_cards.sort_by(|a, b| {
+                    b.latest_mtime
+                        .cmp(&a.latest_mtime)
+                        .then_with(|| a.name.cmp(&b.name))
+                });
+            }
+        }
+    }
+
+    fn poll_time_scan(&mut self) {
+        let mut any_changed = false;
+        let mut done = false;
+        while let Some(event) = self.time_scan.try_recv() {
+            if event.generation != self.time_scan_generation {
+                continue;
+            }
+            self.time_scanned += event.results.len();
+            for (index, path, taken) in event.results {
+                // 通常 index 仍然有效;期间发生删除等结构变化时按路径兜底。
+                let pos = match self.entries.get(index) {
+                    Some(entry) if entry.path == path => Some(index),
+                    _ => self.entries.iter().position(|entry| entry.path == path),
+                };
+                if let Some(pos) = pos {
+                    if self.entries[pos].taken != taken {
+                        self.entries[pos].taken = taken;
+                        any_changed = true;
+                    }
+                }
+            }
+            done |= event.done;
+        }
+        // 扫描结果分批到达:只要整轮扫描结束且有任何变化,就重排一次。
+        if done && any_changed && self.sort_key == SortKey::Taken {
+            self.resort_keep_state();
+        }
+    }
+
+    /// 扫描完成后按新时间重排,尽量保留选中、多选集合与当前图。
+    fn resort_keep_state(&mut self) {
+        let keep: HashSet<PathBuf> = self
+            .selection
+            .iter()
+            .filter_map(|i| self.entries.get(*i))
+            .map(|e| e.path.clone())
+            .collect();
+        let current = self.current_path().cloned();
+        sort_entries(&mut self.entries, self.sort_key, self.sort_asc);
+        self.nav_order = (0..self.entries.len()).collect();
+        self.selection.clear();
+        for (i, entry) in self.entries.iter().enumerate() {
+            if keep.contains(&entry.path) {
+                self.selection.insert(i);
+            }
+        }
+        if let Some(path) = &current {
+            if let Some(pos) = self.entries.iter().position(|e| &e.path == path) {
+                self.selected = pos;
+            }
+        }
+        if self.selection.is_empty() {
+            self.selection.insert(self.selected);
+        }
+        self.selection_anchor = self.selected;
+        self.refresh_info();
+    }
+
+    // ------------------------------------------------------------------
     // Theme / language
     // ------------------------------------------------------------------
 
@@ -1372,27 +1538,42 @@ impl EasyShowApp {
     }
 
     fn poll_thumbs(&mut self) {
+        use crate::thumbs::ThumbEvent;
         while let Some(event) = self.thumbs.try_recv() {
-            self.thumb_inflight.remove(&event.path);
-            if event.generation != self.thumb_generation {
-                continue;
-            }
-            if let Ok(image) = event.result {
-                self.thumb_imgs.insert(event.path.clone(), image);
-                self.thumb_order.push_back(event.path);
-                while self.thumb_order.len() > THUMB_CACHE_CAP {
-                    if let Some(old) = self.thumb_order.pop_front() {
-                        self.thumb_imgs.remove(&old);
-                        self.thumb_tex.remove(&old);
+            match event {
+                ThumbEvent::Done { path, generation, image } => {
+                    self.thumb_inflight.remove(&path);
+                    if generation != self.thumb_generation {
+                        continue;
                     }
+                    self.thumb_imgs.insert(path.clone(), image);
+                    self.thumb_order.push_back(path);
+                    while self.thumb_order.len() > THUMB_CACHE_CAP {
+                        if let Some(old) = self.thumb_order.pop_front() {
+                            self.thumb_imgs.remove(&old);
+                            self.thumb_tex.remove(&old);
+                        }
+                    }
+                }
+                ThumbEvent::Failed { path, message } => {
+                    self.thumb_inflight.remove(&path);
+                    log::warn!("thumbnail {}: {message}", path.display());
+                    self.thumb_failed.insert(path);
+                }
+                ThumbEvent::Skipped { path } => {
+                    // 滚出视口被跳过:清掉 inflight,滚回来时会重新请求
+                    self.thumb_inflight.remove(&path);
                 }
             }
         }
     }
 
-    /// Queue a thumbnail for `path` unless present / already in flight.
+    /// Queue a thumbnail for `path` unless present / already in flight / failed.
     pub fn request_thumb(&mut self, path: &Path) {
-        if self.thumb_imgs.contains_key(path) || self.thumb_inflight.contains(path) {
+        if self.thumb_imgs.contains_key(path)
+            || self.thumb_inflight.contains(path)
+            || self.thumb_failed.contains(path)
+        {
             return;
         }
         self.thumb_inflight.insert(path.to_path_buf());
@@ -1466,7 +1647,12 @@ impl EasyShowApp {
                     self.request_delete();
                 }
                 if enter {
-                    self.open_selected_in_viewer(ctx);
+                    if let Some(card) = self.selected_folder.and_then(|i| self.folder_cards.get(i)) {
+                        let dir = card.dir.clone();
+                        self.open_dir(ctx, dir, None, Mode::Grid);
+                    } else {
+                        self.open_selected_in_viewer(ctx);
+                    }
                 }
                 if map_key {
                     self.enter_map(ctx);
@@ -1638,6 +1824,8 @@ impl eframe::App for EasyShowApp {
         #[cfg(feature = "formats")]
         self.poll_anim(&ctx);
         self.poll_geo_scan();
+        self.poll_time_scan();
+        self.poll_folders();
         self.poll_geocode();
         self.poll_tiles(&ctx);
         self.handle_keys(&ctx);
@@ -1695,6 +1883,7 @@ impl eframe::App for EasyShowApp {
             || !self.tile_inflight.is_empty()
             || self.place_loading
             || self.geo_scanned < self.geo_total
+            || self.time_scanned < self.time_total
         {
             ctx.request_repaint();
         }

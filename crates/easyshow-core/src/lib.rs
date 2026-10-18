@@ -9,13 +9,15 @@ pub mod exif;
 pub mod image_buf;
 pub mod resize;
 pub mod thumb;
+pub mod timeutil;
 
 use std::path::Path;
 
 pub use codec::{decode_file, decode_file_scaled, from_extension, probe, Format};
 pub use error::{Error, Result};
-pub use exif::{read_gps, read_summary, ExifSummary};
+pub use exif::{read_gps, read_summary, read_taken_time, ExifSummary};
 pub use image_buf::ImageBuf;
+pub use timeutil::DateTimeParts;
 
 /// Image dimensions without decoding pixels (JPEG/PNG/... read headers;
 /// HEIC/AVIF query the container with the `heic` feature; JPEG XL / PSD / SVG
