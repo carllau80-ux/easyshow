@@ -27,3 +27,7 @@ EasyShow itself is licensed under MIT OR Apache-2.0. The main third-party compon
 - The `resvg` family is MPL-2.0. This project links it as a library and **does not modify its source**; the source is available from crates.io.
 - `libheif` is used only in the full build through runtime `dlopen` (DLLs bundled with the Windows installer, system `libheif1` on Linux, bundled inside the macOS app). It is a separate runtime component.
 - Online map tiles and geocoding: map data © OpenStreetMap contributors (ODbL) or © AMap; the terms of the respective service apply.
+
+## In-app notices
+
+Settings → About EasyShow → **Open source components** shows the component table and the full MIT/Apache license texts. The Windows installer includes this document (`THIRD-PARTY.md`) and the `licenses/` folder with the bundled DLL licenses.

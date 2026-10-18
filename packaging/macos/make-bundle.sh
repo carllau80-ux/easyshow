@@ -48,6 +48,9 @@ bundle() { # $1 = full|lite
     local app="build/macos/$app_name.app"
     rm -rf "$app"
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
+    for f in README.md THIRD-PARTY.md LICENSE-MIT LICENSE-APACHE; do
+        [ -f "$f" ] && cp "$f" "$app/Contents/Resources/"
+    done
     install -m755 "$bin" "$app/Contents/MacOS/$exe_name"
 
     # 图标 → icns

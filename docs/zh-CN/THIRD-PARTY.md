@@ -27,3 +27,7 @@ EasyShow 本体采用 MIT OR Apache-2.0。以下为随二进制分发的主要�
 - `resvg` 系列为 MPL-2.0:本项目以库的形式静态链接使用,**未修改其源码**;其源码可从 crates.io 获取。
 - `libheif` 仅在完整版中通过运行时 `dlopen` 使用(Windows 安装包随附 DLL,Linux 依赖系统 `libheif1`,macOS 打包内置),属于独立进程外组件。
 - 在线地图瓦片/地名服务:地图数据 © OpenStreetMap contributors(ODbL)或 © 高德地图,使用条款由对应服务方规定。
+
+## 应用内说明
+
+设置 → 关于 EasyShow →「开源组件」可查看组件清单与 MIT/Apache 许可证全文。Windows 安装包内包含本文档(`THIRD-PARTY.md`)及随包 DLL 的 `licenses/` 目录。

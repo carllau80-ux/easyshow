@@ -11,8 +11,8 @@ Repository: <https://github.com/carllau80-ux/easyshow> (SSH push access verified
 The only version source is `[workspace.package] version` in `Cargo.toml`.
 
 ```bash
-packaging/bump-version.sh          # patch bump (0.2.6 → 0.2.7)
-packaging/bump-version.sh minor    # 0.2.7 → 0.3.0
+packaging/bump-version.sh          # patch bump (0.2.7 → 0.2.8)
+packaging/bump-version.sh minor    # 0.2.8 → 0.3.0
 ```
 
 The version flows into the window title/CLI, installer filenames, the Settings dialog and release assets.

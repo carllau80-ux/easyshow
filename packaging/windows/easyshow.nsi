@@ -68,6 +68,7 @@ Section "${DISPLAY_NAME} 主程序 (必需)" SecMain
   SetOutPath "$INSTDIR"
   File "${SRC}${PAYLOAD_EXE}"
   File /nonfatal "${SRC}README.md"
+  File /nonfatal "${SRC}THIRD-PARTY.md"
   File /nonfatal "${SRC}使用说明.txt"
   File /nonfatal "${SRC}LICENSE-MIT" "${SRC}LICENSE-APACHE"
   File /nonfatal /r "${SRC}*.dll"

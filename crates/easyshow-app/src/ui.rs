@@ -1,6 +1,8 @@
 //! Toolbar (Apple 风格图标), directory tree, thumbnail grid, viewer canvas,
 //! info panel and status bar.
 
+use std::path::{Path, PathBuf};
+
 use eframe::egui;
 
 use crate::app::{display_size, file_name, human_size, upload_thumb_texture, EasyShowApp, Mode};
@@ -51,6 +53,173 @@ fn sort_label(lang: Lang, key: SortKey) -> &'static str {
     }
 }
 
+
+// ----------------------------------------------------------------------
+// Address bar (top, Explorer-like)
+// ----------------------------------------------------------------------
+
+enum AddressAction {
+    Back,
+    Forward,
+    Up,
+    Refresh,
+    BeginEdit,
+    CancelEdit,
+    Submit(String),
+    GoTo(PathBuf),
+}
+
+fn breadcrumb_parts(dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut parts: Vec<(String, PathBuf)> = dir
+        .ancestors()
+        .map(|path| {
+            let label = match path.file_name() {
+                Some(name) => name.to_string_lossy().into_owned(),
+                None => {
+                    let text = path.display().to_string();
+                    if text.is_empty() { "/".to_string() } else { text }
+                }
+            };
+            (label, path.to_path_buf())
+        })
+        .collect();
+    parts.reverse();
+    parts
+}
+
+pub fn address_bar(app: &mut EasyShowApp, ui: &mut egui::Ui) {
+    let lang = app.lang;
+    let mut action: Option<AddressAction> = None;
+    ui.add_space(3.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if icon_button(ui, icons::CARET_LEFT, tr(lang, Key::Back), app.nav_pos > 0).clicked() {
+            action = Some(AddressAction::Back);
+        }
+        if icon_button(
+            ui,
+            icons::CARET_RIGHT,
+            tr(lang, Key::Forward),
+            app.nav_pos + 1 < app.nav_history.len(),
+        )
+        .clicked()
+        {
+            action = Some(AddressAction::Forward);
+        }
+        let can_up = app.current_dir.parent().is_some_and(|p| p != app.current_dir);
+        if icon_button(ui, icons::ARROW_UP, tr(lang, Key::Up), can_up).clicked() {
+            action = Some(AddressAction::Up);
+        }
+        if icon_button(ui, icons::ARROW_CLOCKWISE, tr(lang, Key::Refresh), true).clicked() {
+            action = Some(AddressAction::Refresh);
+        }
+        ui.separator();
+
+        if app.address_edit.is_some() {
+            let mut text = app.address_edit.clone().unwrap_or_default();
+            let id = ui.make_persistent_id("easyshow-address-edit");
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut text)
+                    .id(id)
+                    .desired_width((ui.available_width() - 76.0).max(160.0))
+                    .hint_text(app.current_dir.display().to_string()),
+            );
+            app.address_edit = Some(text.clone());
+            if app.address_focus {
+                response.request_focus();
+                app.address_focus = false;
+            }
+            let lost = response.lost_focus();
+            let submit = lost && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let go = icon_button(ui, icons::CARET_RIGHT, "Go", true).clicked();
+            if submit || go {
+                action = Some(AddressAction::Submit(text.clone()));
+            }
+            if ui.small_button("×").on_hover_text(tr(lang, Key::Close)).clicked()
+                || ui.input(|i| i.key_pressed(egui::Key::Escape))
+            {
+                action = Some(AddressAction::CancelEdit);
+            } else if lost && !submit && action.is_none() {
+                // 点击别处时退出编辑(但不要覆盖正在进行的导航按钮)。
+                action = Some(AddressAction::CancelEdit);
+            }
+            if let Some(error) = &app.address_error {
+                ui.colored_label(egui::Color32::from_rgb(0xff, 0x76, 0x6e), "!")
+                    .on_hover_text(error);
+            }
+        } else {
+            let total = ui.available_width();
+            let edit_w = 60.0;
+            let crumbs_w = (total - edit_w - 8.0).max(120.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(crumbs_w, 24.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    egui::ScrollArea::horizontal()
+                        .id_salt("address-crumbs")
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let parts = breadcrumb_parts(&app.current_dir);
+                                let count = parts.len();
+                                for (index, (label, path)) in parts.into_iter().enumerate() {
+                                    if index > 0 {
+                                        ui.weak("›");
+                                    }
+                                    let text = egui::RichText::new(elide(&label, 26)).size(12.0);
+                                    if index + 1 == count {
+                                        ui.label(text.strong());
+                                    } else if ui
+                                        .add(egui::Button::new(text).frame(false))
+                                        .on_hover_text(path.display().to_string())
+                                        .clicked()
+                                    {
+                                        action = Some(AddressAction::GoTo(path));
+                                    }
+                                }
+                                if app.mode == Mode::Viewer {
+                                    if let Some(path) = app.current_path() {
+                                        ui.weak("›");
+                                        ui.label(
+                                            egui::RichText::new(elide(&file_name(path), 30))
+                                                .size(12.0)
+                                                .color(Palette::for_ui(ui).text_dim),
+                                        );
+                                    }
+                                }
+                            });
+                        });
+                },
+            );
+            if ui
+                .small_button(tr(lang, Key::Edit))
+                .on_hover_text(tr(lang, Key::EditPath))
+                .clicked()
+            {
+                action = Some(AddressAction::BeginEdit);
+            }
+            if let Some(error) = &app.address_error {
+                ui.colored_label(egui::Color32::from_rgb(0xff, 0x76, 0x6e), "!")
+                    .on_hover_text(error);
+            }
+        }
+    });
+    ui.add_space(2.0);
+    ui.separator();
+
+    match action {
+        Some(AddressAction::Back) => app.go_back(ui.ctx()),
+        Some(AddressAction::Forward) => app.go_forward(ui.ctx()),
+        Some(AddressAction::Up) => app.go_up(ui.ctx()),
+        Some(AddressAction::Refresh) => app.refresh_current(ui.ctx()),
+        Some(AddressAction::BeginEdit) => app.begin_address_edit(),
+        Some(AddressAction::CancelEdit) => app.cancel_address_edit(),
+        Some(AddressAction::Submit(text)) => app.submit_address(ui.ctx(), &text),
+        Some(AddressAction::GoTo(path)) => app.navigate_to(ui.ctx(), path),
+        None => {}
+    }
+}
+
 // ----------------------------------------------------------------------
 // Toolbar
 // ----------------------------------------------------------------------
@@ -68,13 +237,13 @@ pub fn toolbar(app: &mut EasyShowApp, ui: &mut egui::Ui) {
         if icon_button(ui, icons::FILE_IMAGE, tr(lang, Key::Open), true).clicked() {
             if let Some(path) = rfd::FileDialog::new().pick_file() {
                 let ctx = ui.ctx().clone();
-                app.open_path(&ctx, path);
+                app.navigate_to(&ctx, path);
             }
         }
         if icon_button(ui, icons::FOLDER_OPEN, tr(lang, Key::OpenFolder), true).clicked() {
             if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                 let ctx = ui.ctx().clone();
-                app.open_dir(&ctx, dir, None, Mode::Grid);
+                app.navigate_to(&ctx, dir);
             }
         }
         toolbar_sep(ui);
@@ -244,6 +413,9 @@ pub fn toolbar(app: &mut EasyShowApp, ui: &mut egui::Ui) {
                     }
                 }
                 ui.separator();
+                if ui.button(tr(lang, Key::About)).clicked() {
+                    app.about_open = true;
+                }
                 ui.weak(format!("{} v{}", crate::APP_NAME, env!("CARGO_PKG_VERSION")));
             })
             .response
@@ -362,7 +534,7 @@ pub fn tree_panel(app: &mut EasyShowApp, ui: &mut egui::Ui) {
                     node.ensure_loaded();
                 }
                 let ctx = ui.ctx().clone();
-                app.open_dir(&ctx, path, None, Mode::Grid);
+                app.navigate_to(&ctx, path);
             }
         }
     }
@@ -591,6 +763,54 @@ pub fn grid(app: &mut EasyShowApp, ui: &mut egui::Ui) {
             }
         });
         return;
+    }
+
+    if !app.selection.is_empty() {
+        ui.add_space(6.0);
+        let mut select_all = false;
+        let mut clear = false;
+        let mut delete = false;
+        ui.horizontal(|ui| {
+            let count = app.selection.len();
+            let total: u64 = app
+                .selection
+                .iter()
+                .filter_map(|index| app.entries.get(*index))
+                .map(|entry| entry.size)
+                .sum();
+            ui.strong(tr(lang, Key::SelectedCount).replace("{n}", &count.to_string()));
+            ui.weak(human_size(total));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let response = ui.add_enabled(
+                    app.delete_enabled,
+                    egui::Button::new(tr(lang, Key::DeleteSelected)),
+                );
+                let response = response.on_hover_text(if app.delete_enabled {
+                    tr(lang, Key::Delete)
+                } else {
+                    tr(lang, Key::DeleteEnableHint)
+                });
+                if response.clicked() {
+                    delete = true;
+                }
+                if ui.button(tr(lang, Key::ClearSelection)).clicked() {
+                    clear = true;
+                }
+                if ui.button(tr(lang, Key::SelectAll)).clicked() {
+                    select_all = true;
+                }
+            });
+        });
+        if select_all {
+            app.select_all();
+        }
+        if clear {
+            app.clear_selection();
+        }
+        if delete {
+            app.request_delete();
+        }
+        ui.add_space(2.0);
     }
 
     ui.add_space(8.0);
@@ -832,7 +1052,7 @@ pub fn grid(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     if let Some(fi) = open_folder {
         if let Some(card) = app.folder_cards.get(fi) {
             let dir = card.dir.clone();
-            app.open_dir(ui.ctx(), dir, None, Mode::Grid);
+            app.navigate_to(ui.ctx(), dir);
         }
     }
 }
@@ -1472,9 +1692,25 @@ pub fn status(app: &mut EasyShowApp, ui: &mut egui::Ui) {
 // 删除确认(模态)
 // ----------------------------------------------------------------------
 
+fn modal_backdrop(ctx: &egui::Context) {
+    egui::Area::new(egui::Id::unique("easyshow-modal-backdrop"))
+        .order(egui::Order::Middle)
+        .fixed_pos(egui::Pos2::ZERO)
+        .show(ctx, |ui| {
+            ui.painter()
+                .rect_filled(ctx.content_rect(), 0.0, egui::Color32::from_black_alpha(120));
+        });
+}
+
 pub fn delete_modal(app: &mut EasyShowApp, ctx: &egui::Context) {
     let Some(paths) = app.pending_delete.clone() else { return };
+    modal_backdrop(ctx);
     let lang = app.lang;
+    let total: u64 = paths
+        .iter()
+        .filter_map(|path| app.entries.iter().find(|entry| &entry.path == path))
+        .map(|entry| entry.size)
+        .sum();
     let mut cancel = false;
     let mut confirm = false;
     egui::Window::new(tr(lang, Key::DeleteConfirmTitle))
@@ -1482,18 +1718,28 @@ pub fn delete_modal(app: &mut EasyShowApp, ctx: &egui::Context) {
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
-            ui.set_min_width(340.0);
+            ui.set_min_width(380.0);
             ui.label(tr(lang, Key::DeleteConfirmBody).replace("{n}", &paths.len().to_string()));
+            if total > 0 {
+                ui.weak(format!("{}: {}", tr(lang, Key::Size), human_size(total)));
+            }
             ui.add_space(6.0);
-            for path in paths.iter().take(5) {
+            for path in paths.iter().take(10) {
                 ui.weak(file_name(path));
             }
-            if paths.len() > 5 {
-                ui.weak(format!("… +{}", paths.len() - 5));
+            if paths.len() > 10 {
+                ui.weak(format!("… +{}", paths.len() - 10));
             }
+            ui.add_space(8.0);
+            ui.weak(tr(lang, Key::DeleteNote));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.button(tr(lang, Key::Cancel)).clicked() {
+                let cancel_response = ui.button(tr(lang, Key::Cancel));
+                if app.delete_focus_cancel {
+                    cancel_response.request_focus();
+                    app.delete_focus_cancel = false;
+                }
+                if cancel_response.clicked() {
                     cancel = true;
                 }
                 let destructive = egui::Button::new(
@@ -1510,4 +1756,150 @@ pub fn delete_modal(app: &mut EasyShowApp, ctx: &egui::Context) {
     } else if confirm {
         app.confirm_delete(ctx);
     }
+}
+
+// ----------------------------------------------------------------------
+// About / open-source components
+// ----------------------------------------------------------------------
+
+/// (component, Chinese purpose, English purpose, license)
+const COMPONENTS: &[(&str, &str, &str, &str)] = &[
+    ("eframe / egui", "界面与 GPU 渲染", "UI and GPU rendering", "MIT / Apache-2.0"),
+    ("image / zune-jpeg", "图像解码", "Image decoding", "MIT / Apache-2.0"),
+    ("fast_image_resize", "高质量缩放", "High-quality resizing", "MIT"),
+    ("kamadak-exif", "EXIF / 方向 / GPS", "EXIF, orientation, GPS", "BSD-2-Clause"),
+    ("libheif (runtime)", "HEIC / AVIF 解码", "HEIC/AVIF decoding", "LGPL-2.1 (dynamic)"),
+    ("jxl-oxide", "JPEG XL 解码", "JPEG XL decoding", "Apache-2.0"),
+    ("resvg / usvg / tiny-skia", "SVG 渲染", "SVG rendering", "MPL-2.0 / MIT / BSD-3-Clause"),
+    ("psd", "PSD 合成图", "PSD composite decoding", "MIT"),
+    ("ureq / rustls / ring", "HTTPS(地名/瓦片)", "HTTPS (geocoding/tiles)", "MIT / Apache-2.0 / ISC"),
+    ("serde_json / libc / crossbeam-channel", "配置 / 时间 / 线程", "Config, time, workers", "MIT / Apache-2.0"),
+    ("Natural Earth / world-atlas", "离线世界地图", "Offline world map", "Public Domain / ISC"),
+    ("DataV.GeoAtlas / 高德地图", "离线中国省界", "Offline China provinces", "Data © service providers"),
+    ("Phosphor Icons", "工具栏图标", "Toolbar icons", "MIT"),
+];
+
+pub fn about_modals(app: &mut EasyShowApp, ctx: &egui::Context) {
+    if !app.about_open && !app.components_open {
+        return;
+    }
+    modal_backdrop(ctx);
+    if app.about_open {
+        about_window(app, ctx);
+    }
+    if app.components_open {
+        components_window(app, ctx);
+    }
+}
+
+fn about_window(app: &mut EasyShowApp, ctx: &egui::Context) {
+    let lang = app.lang;
+    let mut open = true;
+    let mut window_open = true;
+    let mut show_components = false;
+    let mut copied = false;
+    egui::Window::new(tr(lang, Key::AboutTitle))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .open(&mut window_open)
+        .show(ctx, |ui| {
+            ui.set_min_width(380.0);
+            ui.heading("EasyShow");
+            let variant = if cfg!(all(feature = "heic", feature = "formats")) {
+                "Full"
+            } else {
+                "Lite"
+            };
+            ui.weak(format!("v{} · {variant}", env!("CARGO_PKG_VERSION")));
+            ui.add_space(4.0);
+            ui.label(tr(lang, Key::AboutDesc));
+            ui.add_space(8.0);
+            ui.hyperlink_to(
+                tr(lang, Key::GitHub),
+                "https://github.com/carllau80-ux/easyshow",
+            );
+            ui.horizontal(|ui| {
+                ui.label(tr(lang, Key::Email));
+                ui.hyperlink_to(crate::app::CONTACT_EMAIL, format!("mailto:{}", crate::app::CONTACT_EMAIL));
+                if ui.small_button(tr(lang, Key::Copy)).clicked() {
+                    ui.ctx().copy_text(crate::app::CONTACT_EMAIL.to_string());
+                    copied = true;
+                }
+                if copied {
+                    ui.weak(tr(lang, Key::Copied));
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr(lang, Key::License));
+                ui.label("MIT OR Apache-2.0");
+            });
+            ui.add_space(10.0);
+            if ui.button(tr(lang, Key::OpenSource)).clicked() {
+                show_components = true;
+            }
+            ui.add_space(4.0);
+            if ui.button(tr(lang, Key::Close)).clicked() {
+                open = false;
+            }
+        });
+    app.about_open = open && window_open && !show_components;
+    if show_components {
+        app.about_open = false;
+        app.components_open = true;
+    }
+}
+
+fn components_window(app: &mut EasyShowApp, ctx: &egui::Context) {
+    let lang = app.lang;
+    let mut open = true;
+    let mut window_open = true;
+    egui::Window::new(tr(lang, Key::OpenSourceTitle))
+        .collapsible(false)
+        .resizable(true)
+        .default_width(580.0)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .open(&mut window_open)
+        .show(ctx, |ui| {
+            ui.label(tr(lang, Key::OpenSourceIntro));
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical()
+                .max_height(420.0)
+                .show(ui, |ui| {
+                    egui::Grid::new("easyshow-components")
+                        .num_columns(3)
+                        .striped(true)
+                        .spacing([14.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.strong(tr(lang, Key::Component));
+                            ui.strong(tr(lang, Key::Purpose));
+                            ui.strong(tr(lang, Key::License));
+                            ui.end_row();
+                            for (name, zh, en, license) in COMPONENTS {
+                                ui.label(*name);
+                                ui.label(if lang == Lang::Zh { *zh } else { *en });
+                                ui.label(*license);
+                                ui.end_row();
+                            }
+                        });
+                    ui.add_space(10.0);
+                    ui.collapsing("MIT License", |ui| {
+                        egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                            ui.monospace(include_str!("../../../LICENSE-MIT"));
+                        });
+                    });
+                    ui.collapsing("Apache License 2.0", |ui| {
+                        egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                            ui.monospace(include_str!("../../../LICENSE-APACHE"));
+                        });
+                    });
+                });
+            ui.add_space(4.0);
+            ui.weak("libheif (LGPL-2.1) and other bundled DLL licenses are included in the licenses/ folder of the installer. Full notices: docs/THIRD-PARTY.md.");
+            ui.add_space(6.0);
+            if ui.button(tr(lang, Key::Close)).clicked() {
+                open = false;
+            }
+        });
+    app.components_open = open && window_open;
 }

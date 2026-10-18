@@ -88,6 +88,7 @@ exit 0
 EOF
     cp "$debroot/DEBIAN/postinst" "$debroot/DEBIAN/postrm"
     chmod 755 "$debroot/DEBIAN/postinst" "$debroot/DEBIAN/postrm"
+    install -m644 docs/THIRD-PARTY.md "$debroot/usr/share/doc/$pkg/THIRD-PARTY.md"
     chmod 644 "$debroot/usr/share/applications/$pkg.desktop" "$debroot/usr/share/doc/$pkg/copyright"
 
     dpkg-deb --build --root-owner-group "$debroot" "$DIST/${pkg}_${VERSION}_amd64.deb" >/dev/null
@@ -110,6 +111,7 @@ make_tar() {
     cp -r assets "$stage/assets"
     install -m755 packaging/install-local.sh "$stage/packaging/install-local.sh"
     cp README.md "$stage/"
+    cp docs/THIRD-PARTY.md "$stage/" 2>/dev/null || true
     local f
     for f in LICENSE-MIT LICENSE-APACHE; do [ -f "$f" ] && cp "$f" "$stage/"; done
     tar -C build/tar -czf "$DIST/easyshow-${VERSION}-linux-x86_64-$tag.tar.gz" "$(basename "$stage")"

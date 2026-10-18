@@ -64,6 +64,7 @@ else
 fi
 
 cp README.md "$STAGE_FULL/README.md" 2>/dev/null || true
+cp docs/THIRD-PARTY.md "$STAGE_FULL/THIRD-PARTY.md" 2>/dev/null || true
 for f in LICENSE-MIT LICENSE-APACHE; do [ -f "$f" ] && cp "$f" "$STAGE_FULL/"; done
 
 cat > "$STAGE_FULL/使用说明.txt" <<'EOF'

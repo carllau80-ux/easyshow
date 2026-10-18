@@ -31,6 +31,9 @@ pub enum Mode {
     Map,
 }
 
+/// Displayed contact address in the About dialog.
+pub const CONTACT_EMAIL: &str = "carllau80@gmail.com";
+
 pub struct CurrentImage {
     pub path: PathBuf,
     /// As decoded (EXIF orientation applied, possibly downscaled for display).
@@ -130,6 +133,17 @@ pub struct EasyShowApp {
     pub show_tree: bool,
     pub show_info: bool,
     pub theme_mode: ThemeMode,
+    // --- navigation / address bar ---
+    pub nav_history: Vec<PathBuf>,
+    pub nav_pos: usize,
+    pub address_edit: Option<String>,
+    pub address_focus: bool,
+    pub address_error: Option<String>,
+    // --- about dialogs ---
+    pub about_open: bool,
+    pub components_open: bool,
+    /// Focus the Cancel button on the next delete modal frame.
+    pub delete_focus_cancel: bool,
     /// 资源管理器原生图标(仅 Windows;懒加载)。
     pub shell_icons: Option<crate::shell_icons::ShellIcons>,
     shell_icons_tried: bool,
@@ -386,6 +400,14 @@ impl EasyShowApp {
             show_tree: true,
             show_info: true,
             theme_mode: ThemeMode::System,
+            nav_history: Vec::new(),
+            nav_pos: 0,
+            address_edit: None,
+            address_focus: false,
+            address_error: None,
+            about_open: false,
+            components_open: false,
+            delete_focus_cancel: false,
             shell_icons: None,
             shell_icons_tried: false,
             net: config::load(),
@@ -439,6 +461,8 @@ impl EasyShowApp {
                 app.open_dir(&cc.egui_ctx, startup_dir, None, Mode::Grid);
             }
         }
+        app.nav_history = vec![app.current_dir.clone()];
+        app.nav_pos = 0;
         app
     }
 
@@ -457,6 +481,224 @@ impl EasyShowApp {
         } else {
             self.error = Some(format!("{}: not found", path.display()));
         }
+    }
+
+    /// 用户主动跳转(目录树、地址栏、拖拽、文件夹卡片):记录历史后打开。
+    pub fn navigate_to(&mut self, ctx: &egui::Context, path: PathBuf) {
+        self.cancel_address_edit();
+        let path = normalize_path(std::fs::canonicalize(&path).unwrap_or(path));
+        if !path.exists() {
+            self.address_error = Some(format!("{}: {}", tr(self.lang, Key::PathNotFound), path.display()));
+            return;
+        }
+        self.address_error = None;
+        let target_dir = if path.is_dir() {
+            path.clone()
+        } else {
+            path.parent().map(Path::to_path_buf).unwrap_or_else(|| self.current_dir.clone())
+        };
+        if target_dir != self.current_dir {
+            self.nav_history.truncate(self.nav_pos + 1);
+            if self.nav_history.last() != Some(&target_dir) {
+                self.nav_history.push(target_dir);
+            }
+            if self.nav_history.len() > 50 {
+                let drop = self.nav_history.len() - 50;
+                self.nav_history.drain(0..drop);
+            }
+            self.nav_pos = self.nav_history.len().saturating_sub(1);
+        }
+        self.open_path(ctx, path);
+    }
+
+    pub fn go_back(&mut self, ctx: &egui::Context) {
+        self.cancel_address_edit();
+        while self.nav_pos > 0 {
+            self.nav_pos -= 1;
+            let dir = self.nav_history[self.nav_pos].clone();
+            if dir.is_dir() {
+                self.address_error = None;
+                self.open_dir(ctx, dir, None, Mode::Grid);
+                return;
+            }
+            self.nav_history.remove(self.nav_pos);
+        }
+        self.nav_pos = 0;
+    }
+
+    pub fn go_forward(&mut self, ctx: &egui::Context) {
+        self.cancel_address_edit();
+        while self.nav_pos + 1 < self.nav_history.len() {
+            self.nav_pos += 1;
+            let dir = self.nav_history[self.nav_pos].clone();
+            if dir.is_dir() {
+                self.address_error = None;
+                self.open_dir(ctx, dir, None, Mode::Grid);
+                return;
+            }
+            self.nav_history.remove(self.nav_pos);
+            self.nav_pos = self.nav_pos.saturating_sub(1);
+        }
+    }
+
+    pub fn go_up(&mut self, ctx: &egui::Context) {
+        if let Some(parent) = self.current_dir.parent() {
+            let parent = parent.to_path_buf();
+            if parent != self.current_dir {
+                self.navigate_to(ctx, parent);
+            }
+        }
+    }
+
+    pub fn begin_address_edit(&mut self) {
+        self.address_edit = Some(self.current_dir.display().to_string());
+        self.address_focus = true;
+        self.address_error = None;
+    }
+
+    pub fn cancel_address_edit(&mut self) {
+        self.address_edit = None;
+        self.address_focus = false;
+        self.address_error = None;
+    }
+
+    /// 地址栏回车:支持绝对/相对路径与 `~`。
+    pub fn submit_address(&mut self, ctx: &egui::Context, input: &str) {
+        let input = input.trim().trim_matches('"');
+        if input.is_empty() {
+            self.cancel_address_edit();
+            return;
+        }
+        let expanded = if input == "~"
+            || input.starts_with("~/")
+            || input.starts_with("~\\")
+        {
+            let rest = input.trim_start_matches('~').trim_start_matches(['/', '\\']);
+            let mut p = home_dir();
+            if !rest.is_empty() {
+                p.push(rest);
+            }
+            p
+        } else {
+            PathBuf::from(input)
+        };
+        let mut path = expanded;
+        if path.is_relative() {
+            path = self.current_dir.join(path);
+        }
+        let path = normalize_path(std::fs::canonicalize(&path).unwrap_or(path));
+        if !path.exists() {
+            self.address_error = Some(format!("{}: {}", tr(self.lang, Key::PathNotFound), path.display()));
+            return;
+        }
+        self.cancel_address_edit();
+        self.navigate_to(ctx, path);
+    }
+
+    /// 重新扫描当前目录,保留模式、选择和地图视野。
+    pub fn refresh_current(&mut self, ctx: &egui::Context) {
+        self.cancel_address_edit();
+        if !self.current_dir.is_dir() {
+            let fallback = self
+                .current_dir
+                .parent()
+                .map(Path::to_path_buf)
+                .filter(|p| p.is_dir())
+                .unwrap_or_else(home_dir);
+            self.open_dir(ctx, fallback, None, Mode::Grid);
+            self.error = Some(tr(self.lang, Key::PathNotFound).to_string());
+            return;
+        }
+        let mode = self.mode;
+        let selected_path = self.current_path().cloned();
+        let old_selected = self.selected;
+        let old: Vec<(PathBuf, u64, std::time::SystemTime)> = self
+            .entries
+            .iter()
+            .map(|entry| (entry.path.clone(), entry.size, entry.modified))
+            .collect();
+
+        self.entries = scan_entries(&self.current_dir);
+        sort_entries(&mut self.entries, self.sort_key, self.sort_asc);
+        let selected = selected_path
+            .as_ref()
+            .and_then(|path| self.entries.iter().position(|entry| &entry.path == path))
+            .unwrap_or_else(|| old_selected.min(self.entries.len().saturating_sub(1)));
+        self.selected = selected;
+        self.selection.clear();
+        if !self.entries.is_empty() {
+            self.selection.insert(selected);
+        }
+        self.selection_anchor = selected;
+        self.nav_order = (0..self.entries.len()).collect();
+        self.selected_folder = None;
+
+        // 丢弃已修改/已删除文件的缩略图;未变化文件继续复用。
+        let now: HashMap<&Path, (u64, std::time::SystemTime)> = self
+            .entries
+            .iter()
+            .map(|entry| (entry.path.as_path(), (entry.size, entry.modified)))
+            .collect();
+        let mut changed = Vec::new();
+        for (path, size, modified) in &old {
+            match now.get(path.as_path()) {
+                Some(&(new_size, new_modified)) if new_size == *size && new_modified == *modified => {}
+                _ => changed.push(path.clone()),
+            }
+        }
+        for path in &changed {
+            self.thumb_imgs.remove(path);
+            self.thumb_tex.remove(path);
+            self.thumb_failed.remove(path);
+        }
+        self.thumb_inflight.clear();
+        self.thumb_generation += 1;
+        self.last_thumb_wanted.clear();
+
+        self.start_folder_scan();
+        self.time_scan_generation += 1;
+        self.time_scan_dir = None;
+        self.time_scanned = 0;
+        self.time_total = 0;
+        if self.sort_key == SortKey::Taken {
+            self.start_time_scan();
+        }
+        self.geo_scan_generation += 1;
+        self.geo_points.clear();
+        self.geo_scanned = 0;
+        self.geo_total = 0;
+        self.geo_scan_dir = None;
+        self.map_focus = None;
+        if mode == Mode::Map {
+            self.start_geo_scan();
+            self.geo_fitted = true; // 刷新不改变当前地图视野
+        }
+
+        self.error = None;
+        if mode == Mode::Viewer {
+            if self.entries.is_empty() {
+                self.mode = Mode::Grid;
+                self.current = None;
+                self.info = None;
+            } else {
+                self.load_current(ctx);
+            }
+        } else {
+            self.current = None;
+            self.refresh_info();
+        }
+        self.sync_title(ctx);
+    }
+
+    fn sync_title(&self, ctx: &egui::Context) {
+        let title = match self.mode {
+            Mode::Map => tr(self.lang, Key::Map).to_string(),
+            _ => self
+                .current_path()
+                .map(|path| file_name(path))
+                .unwrap_or_else(|| file_name(&self.current_dir)),
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{title} — EasyShow")));
     }
 
     pub fn open_dir(&mut self, ctx: &egui::Context, dir: PathBuf, select: Option<PathBuf>, mode: Mode) {
@@ -499,7 +741,7 @@ impl EasyShowApp {
         self.folder_scan_dir = None;
         self.folders_scanning = false;
         self.selected_folder = None;
-        self.grid_scroll_to = None;
+        self.grid_scroll_to = Some(0.0); // 新目录从顶部开始
         self.place = None;
         self.place_loading = false;
         self.map_focus = None;
@@ -675,13 +917,26 @@ impl EasyShowApp {
         self.refresh_info();
     }
 
-    fn select_relative(&mut self, delta: isize) {
+    pub fn clear_selection(&mut self) {
+        self.selection.clear();
+        self.refresh_info();
+    }
+
+    /// 网格方向键:Shift 扩展选区,Ctrl 只移动焦点(保留已有选择)。
+    fn grid_move(&mut self, delta: isize, extend: bool, focus_only: bool) {
         if self.entries.is_empty() {
             return;
         }
         let n = self.entries.len() as isize;
-        let next = (self.selected as isize + delta).clamp(0, n - 1);
-        self.select(next as usize);
+        let next = (self.selected as isize + delta).clamp(0, n - 1) as usize;
+        if focus_only {
+            self.selected = next;
+            self.refresh_info();
+        } else if extend {
+            self.select_with(next, false, true);
+        } else {
+            self.select(next);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -705,6 +960,7 @@ impl EasyShowApp {
         };
         if !paths.is_empty() {
             self.pending_delete = Some(paths);
+            self.delete_focus_cancel = true;
         }
     }
 
@@ -715,16 +971,39 @@ impl EasyShowApp {
     /// 确认后执行:移入系统回收站(可恢复),随后重新扫描当前目录。
     pub fn confirm_delete(&mut self, ctx: &egui::Context) {
         let Some(paths) = self.pending_delete.take() else { return };
+        self.delete_focus_cancel = false;
         if paths.is_empty() {
             return;
         }
-        if let Err(err) = trash::delete_all(&paths) {
-            self.error = Some(format!("{}: {err}", tr(self.lang, Key::Delete)));
-            return;
+        let mut deleted = 0usize;
+        let mut failed: Vec<PathBuf> = Vec::new();
+        let mut last_error = String::new();
+        for path in &paths {
+            match trash::delete(path) {
+                Ok(()) => deleted += 1,
+                Err(err) => {
+                    last_error = err.to_string();
+                    failed.push(path.clone());
+                }
+            }
         }
         let dir = self.current_dir.clone();
         self.open_dir(ctx, dir, None, Mode::Grid);
-        self.selection.clear();
+        if !failed.is_empty() {
+            self.selection.clear();
+            for path in &failed {
+                if let Some(idx) = self.entries.iter().position(|entry| &entry.path == path) {
+                    self.selection.insert(idx);
+                    self.selected = idx;
+                    self.selection_anchor = idx;
+                }
+            }
+            self.refresh_info();
+            let body = tr(self.lang, Key::DeleteSummary)
+                .replace("{ok}", &deleted.to_string())
+                .replace("{fail}", &failed.len().to_string());
+            self.error = Some(if last_error.is_empty() { body } else { format!("{body} {last_error}") });
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1724,6 +2003,7 @@ impl EasyShowApp {
         let (
             right, left, up, down, home, end, enter, escape, space, delete_key, select_all,
             zoom_in, zoom_out, fit_key, actual_key, rotate_key, flip_key, full_key, map_key,
+            back_nav, forward_nav, up_nav, refresh_key, address_key, shift, command,
         ) = ctx.input(|i| {
             let command = i.modifiers.ctrl || i.modifiers.command;
             (
@@ -1742,27 +2022,78 @@ impl EasyShowApp {
                 i.key_pressed(Key::Minus),
                 i.key_pressed(Key::Num0),
                 i.key_pressed(Key::Num1),
-                i.key_pressed(Key::R),
+                !command && i.key_pressed(Key::R),
                 i.key_pressed(Key::F),
                 i.key_pressed(Key::F11),
                 i.key_pressed(Key::M),
+                i.modifiers.alt && i.key_pressed(Key::ArrowLeft),
+                i.modifiers.alt && i.key_pressed(Key::ArrowRight),
+                i.modifiers.alt && i.key_pressed(Key::ArrowUp),
+                i.key_pressed(Key::F5) || (command && i.key_pressed(Key::R)),
+                command && i.key_pressed(Key::L),
+                i.modifiers.shift,
+                command,
             )
         });
+
+        // 模态/地址栏编辑时屏蔽全局快捷键,避免误操作。
+        if self.pending_delete.is_some() {
+            if escape {
+                self.cancel_delete();
+            }
+            return;
+        }
+        if self.about_open || self.components_open {
+            if escape {
+                self.about_open = false;
+                self.components_open = false;
+            }
+            return;
+        }
+        if self.address_edit.is_some() {
+            if escape {
+                self.cancel_address_edit();
+            }
+            return;
+        }
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        if address_key {
+            self.begin_address_edit();
+            return;
+        }
+        if refresh_key {
+            self.refresh_current(ctx);
+            return;
+        }
+        if back_nav {
+            self.go_back(ctx);
+            return;
+        }
+        if forward_nav {
+            self.go_forward(ctx);
+            return;
+        }
+        if up_nav {
+            self.go_up(ctx);
+            return;
+        }
 
         match self.mode {
             Mode::Grid => {
                 let cols = self.grid_cols.max(1);
                 if right {
-                    self.select_relative(1);
+                    self.grid_move(1, shift, command);
                 }
                 if left {
-                    self.select_relative(-1);
+                    self.grid_move(-1, shift, command);
                 }
                 if down {
-                    self.select_relative(cols as isize);
+                    self.grid_move(cols as isize, shift, command);
                 }
                 if up {
-                    self.select_relative(-(cols as isize));
+                    self.grid_move(-(cols as isize), shift, command);
                 }
                 if home {
                     self.select(0);
@@ -1779,7 +2110,7 @@ impl EasyShowApp {
                 if enter {
                     if let Some(card) = self.selected_folder.and_then(|i| self.folder_cards.get(i)) {
                         let dir = card.dir.clone();
-                        self.open_dir(ctx, dir, None, Mode::Grid);
+                        self.navigate_to(ctx, dir);
                     } else {
                         self.open_selected_in_viewer(ctx);
                     }
@@ -1951,7 +2282,7 @@ impl eframe::App for EasyShowApp {
             })
         });
         if let Some(path) = dropped {
-            self.open_path(&ctx, path);
+            self.navigate_to(&ctx, path);
         }
 
         self.poll_decode(&ctx);
@@ -1981,13 +2312,22 @@ impl eframe::App for EasyShowApp {
             }
             units
         });
+        if self.pending_delete.is_some() || self.about_open || self.components_open {
+            self.pending_wheel_units = 0.0;
+        }
 
         // 非网格模式下清空缩略图可见集,避免后台继续解析
         if self.mode != Mode::Grid {
             self.set_visible_thumbs(Vec::new());
         }
 
+        // 模态窗口打开时禁用底层 UI(键盘在 handle_keys 中单独拦截)。
+        if self.pending_delete.is_some() || self.about_open || self.components_open {
+            ui.disable();
+        }
+
         egui::Panel::top("easyshow-toolbar").show(ui, |ui| crate::ui::toolbar(self, ui));
+        egui::Panel::top("easyshow-address").show(ui, |ui| crate::ui::address_bar(self, ui));
         egui::Panel::bottom("easyshow-status").show(ui, |ui| crate::ui::status(self, ui));
         if self.show_tree {
             egui::Panel::left("easyshow-tree")
@@ -2011,6 +2351,7 @@ impl eframe::App for EasyShowApp {
 
         // 删除二次确认(模态)
         crate::ui::delete_modal(self, &ctx);
+        crate::ui::about_modals(self, &ctx);
 
         // eframe is event-driven: keep frames coming while work is in flight.
         if self.loading

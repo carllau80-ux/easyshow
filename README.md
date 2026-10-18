@@ -40,7 +40,7 @@ If the saved directory no longer exists (removable drive, deleted folder), EasyS
 
 ## Version and releases
 
-- The single source of version truth is `[workspace.package]` in `Cargo.toml` (currently **0.2.7**). Use `packaging/bump-version.sh` to bump the patch version.
+- The single source of version truth is `[workspace.package]` in `Cargo.toml` (currently **0.2.8**). Use `packaging/bump-version.sh` to bump the patch version.
 - Release process: see [docs/PUBLISHING.md](docs/PUBLISHING.md). Pushing a `v*` tag triggers the GitHub Actions workflow.
 - **Current release policy:** Windows full builds only, until the Windows package has been validated. Linux/macOS packaging scripts are kept in the repo but are not published yet. The CI workflow is temporarily Windows-only.
 
@@ -88,11 +88,14 @@ Windows installer features: per-user install (no admin), Start-menu/desktop shor
 
 - **Folder tree:** expandable directory tree; clicking a folder opens its thumbnail grid. On Windows it mirrors Explorer ("This PC" + quick-access folders + drives with system icons).
 - **Thumbnail grid:** double-click a thumbnail to open the viewer, **Esc** returns to the grid; arrow keys move the selection, Enter opens.
+- **Explorer-style address bar:** back / forward / parent / refresh buttons, clickable breadcrumbs, and an editable path (Ctrl+L, Enter to go, Esc to cancel). Keyboard: Alt+←/→/↑, F5. The current folder is rescanned by refresh without losing the selection; the map view keeps its position.
+- **Multi-select and batch delete:** Ctrl-click, Shift-click/Shift+arrow, Ctrl+A. A selection bar shows the count and total size with Select all / Clear / Delete. Deletion must be enabled in Settings and **every delete always asks for confirmation** (count, total size, file names, trash recovery note; Cancel is focused). Batch failures are reported per file.
 - **Subfolder cards:** subfolders containing photos appear as cards at the top of the grid (photo count scanned up to 2 levels deep). The cover is a stable random photo from that folder. **Double-click (or Enter) to enter.**
 - **Timeline:** when sorting by time, year/month/day headers and a right-side navigator (year/month + per-month counts) are shown. Click to jump; the current year/month header sticks while scrolling. The default is **file modified time, newest first** (instant); **EXIF capture time** can be selected and is scanned in the background on first use (progress in the status bar).
 - **Viewer:** every image opens **fit to window** by default (zoom does not carry over to the next image); 1:1, cursor-anchored wheel zoom, drag pan, double-click fit↔1:1, rotate and mirror.
 - **Slideshow:** toolbar ▶ or Space in the viewer; plays the whole folder or the selected batch (multi-select ≥ 2 in the grid); 3/5/10 s intervals.
 - **Batch delete (read-only by default):** disabled unless enabled in Settings. With it on, Ctrl/Shift multi-select + Delete or the trash button → confirmation dialog → move to the OS trash (recoverable).
+- **About and licenses:** Settings → About EasyShow shows the version, GitHub repository, contact email **carllau80@gmail.com**, and the project license. The **Open source components** dialog lists the main libraries with licenses and the full MIT/Apache texts.
 - **Info panel:** dimensions, size, format, modified time and full EXIF (camera, lens, aperture, shutter, ISO, focal length, capture time, GPS; HEIC/AVIF included). **One-click copy** to plain text (EXIF plus place name and coordinates).
 - **Location names:** GPS is shown as country–province–city–district–township. AMap is primary (free web-service key in Settings), with OSM Nominatim as fallback (no key). Results are cached by location; offline or with online features off, coordinates are shown.
 - **Map mode:** map button or **M** clusters geotagged photos in the current folder. **Clusters display up to 4 photo thumbnails** (1 at low zoom, 4 when zoomed in, +N for the rest). **Clicking a cluster opens a full gallery of that cluster** (virtual scrolling; click to select, double-click to view; Esc steps back to the map at the same position). Single photos can be selected and opened. The built-in **offline basemap** has world outlines plus China province boundaries and province labels; enabling online features overlays AMap/OSM tiles (downloaded per viewport, cached, GCJ-02 aligned for AMap).
@@ -108,6 +111,8 @@ Windows installer features: per-user install (no admin), Start-menu/desktop shor
 ## Screenshots
 
 ![Folder tree and thumbnail grid](docs/screenshots/m2-grid-tree.png)
+![Address bar, selection bar and batch actions](docs/screenshots/m10-address-selection.png)
+![Open source components dialog](docs/screenshots/m10-components.png)
 ![Viewer with EXIF panel](docs/screenshots/m2-viewer-exif.png)
 ![Extended format thumbnails (SVG/PSD/HDR/EXR/JXL/animation)](docs/screenshots/m7-formats-grid.png)
 ![SVG rendering](docs/screenshots/m7-svg.png)
@@ -141,6 +146,7 @@ Measured on release builds: 24MP JPEG decode ≈ 104 ms; a 24MP image downsample
 - [x] M3++ folders and timeline: subfolder cards, year/month/day timeline, EXIF capture-time sorting, HEIC embedded thumbnails
 - [x] M3++ offline province basemap (China), cluster gallery and thumbnail scheduling
 - [x] Config persistence: network settings and last-directory restore
+- [x] Address bar navigation, selection/delete hardening, About and open-source notices
 - [ ] Remaining M3: single-instance mode
 - [ ] M4 release: Windows full builds published; Linux/macOS packaging pending validation
 
