@@ -116,6 +116,8 @@ pub struct EasyShowApp {
     last_thumb_wanted: Vec<PathBuf>,
     // --- info panel ---
     pub info: Option<InfoData>,
+    /// 最近一次复制信息的时间(短暂显示「已复制」)。
+    pub info_copied_at: Option<f64>,
     // --- 删除(默认只读) ---
     pub delete_enabled: bool,
     pub pending_delete: Option<Vec<PathBuf>>,
@@ -175,7 +177,7 @@ pub struct EasyShowApp {
     pub china_borders: Option<egui::TextureHandle>,
     pub world_map_loaded: bool,
     /// 地图上聚合点的缩略图弹层。
-    pub map_popup: Option<crate::map::MapPopup>,
+    pub map_focus: Option<crate::map::MapFocus>,
     // --- 动图(完整版;GIF/WebP) ---
     #[cfg(feature = "formats")]
     anim: Option<AnimState>,
@@ -325,7 +327,7 @@ fn normalize_path(path: PathBuf) -> PathBuf {
 }
 
 const PREFETCH_CAP: usize = 4;
-const THUMB_CACHE_CAP: usize = 512;
+const THUMB_CACHE_CAP: usize = 1024;
 const TILE_TEX_CAP: usize = 512;
 
 impl EasyShowApp {
@@ -367,6 +369,7 @@ impl EasyShowApp {
             thumb_generation: 0,
             last_thumb_wanted: Vec::new(),
             info: None,
+            info_copied_at: None,
             delete_enabled: false,
             pending_delete: None,
             slideshow: None,
@@ -415,7 +418,7 @@ impl EasyShowApp {
             china_land: None,
             china_borders: None,
             world_map_loaded: false,
-            map_popup: None,
+            map_focus: None,
             #[cfg(feature = "formats")]
             anim: None,
         };
@@ -487,7 +490,7 @@ impl EasyShowApp {
         self.grid_scroll_to = None;
         self.place = None;
         self.place_loading = false;
-        self.map_popup = None;
+        self.map_focus = None;
         self.tile_tex.clear();
         self.tile_order.clear();
         self.tile_inflight.clear();
@@ -526,6 +529,7 @@ impl EasyShowApp {
 
     pub fn exit_to_grid(&mut self) {
         let entry = self.entry_index();
+        self.map_focus = None;
         self.nav_order = (0..self.entries.len()).collect();
         if let Some(entry) = entry {
             self.selected = entry;
@@ -853,6 +857,7 @@ impl EasyShowApp {
         if self.mode == Mode::Map {
             return;
         }
+        self.map_focus = None;
         self.ensure_identity_order();
         self.slideshow = None;
         self.mode = Mode::Map;
@@ -871,14 +876,82 @@ impl EasyShowApp {
     }
 
     pub fn exit_map_to_grid(&mut self, ctx: &egui::Context) {
+        let keep = self.entry_index();
         self.mode = Mode::Grid;
-        self.map_popup = None;
+        self.map_focus = None;
+        self.nav_order = (0..self.entries.len()).collect();
+        if let Some(idx) = keep {
+            if idx < self.entries.len() {
+                self.selected = idx;
+                self.selection.clear();
+                self.selection.insert(idx);
+                self.selection_anchor = idx;
+            }
+        }
         self.refresh_info();
         let title = self
             .current_path()
             .map(|p| file_name(p))
             .unwrap_or_else(|| file_name(&self.current_dir));
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{title} — EasyShow")));
+    }
+
+    /// 从聚合查看页返回地图(地图 center/zoom 原样保留)。
+    fn return_to_map(&mut self, ctx: &egui::Context) {
+        self.mode = Mode::Map;
+        self.slideshow = None;
+        self.stop_anim();
+        self.refresh_info();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+            "{} — EasyShow",
+            tr(self.lang, Key::Map)
+        )));
+    }
+
+    /// 关闭聚合查看页(回到地图,不改变视野)。
+    pub fn close_map_focus(&mut self, ctx: &egui::Context) {
+        let keep = self.entry_index();
+        self.map_focus = None;
+        self.nav_order = (0..self.entries.len()).collect();
+        if let Some(idx) = keep {
+            if idx < self.entries.len() {
+                self.selected = idx;
+                self.selection.clear();
+                self.selection.insert(idx);
+                self.selection_anchor = idx;
+            }
+        }
+        self.refresh_info();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+            "{} — EasyShow",
+            tr(self.lang, Key::Map)
+        )));
+    }
+
+    /// 在聚合查看页中选择/打开照片:导航顺序限制为该聚合内的全部照片。
+    pub fn focus_photo(&mut self, ctx: &egui::Context, path: &Path, open: bool) {
+        let Some(focus) = &self.map_focus else { return };
+        let indices: Vec<usize> = focus
+            .members
+            .iter()
+            .filter_map(|p| self.entries.iter().position(|e| &e.path == p))
+            .collect();
+        let Some(pos) = indices.iter().position(|&i| self.entries[i].path == path) else {
+            return;
+        };
+        self.nav_order = indices;
+        self.selected = pos;
+        let entry = self.nav_order[pos];
+        self.selection.clear();
+        self.selection.insert(entry);
+        self.selection_anchor = entry;
+        self.selected_folder = None;
+        self.refresh_info();
+        if open {
+            self.mode = Mode::Viewer;
+            self.slideshow = None;
+            self.load_current(ctx);
+        }
     }
 
     /// 把视野适配到当前目录全部带 GPS 的照片。
@@ -1223,6 +1296,18 @@ impl EasyShowApp {
             self.selection.insert(self.selected);
         }
         self.selection_anchor = self.selected;
+        // 聚合查看页打开时,排序重排后仍把导航顺序限制在该聚合内。
+        if let Some(focus) = &self.map_focus {
+            let indices: Vec<usize> = focus
+                .members
+                .iter()
+                .filter_map(|p| self.entries.iter().position(|e| &e.path == p))
+                .collect();
+            if let Some(pos) = indices.iter().position(|&i| i == self.selected) {
+                self.nav_order = indices;
+                self.selected = pos;
+            }
+        }
         self.refresh_info();
     }
 
@@ -1268,6 +1353,9 @@ impl EasyShowApp {
         }
         self.selected = self.selected.min(self.nav_order.len() - 1);
         let Some(path) = self.path_at_pos(self.selected) else { return };
+        // 每张照片默认「适应窗口」;用户在当前图内的缩放不带到下一张。
+        self.viewer.mode = ZoomMode::Fit;
+        self.viewer.offset = egui::Vec2::ZERO;
         self.refresh_info();
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{} — EasyShow", file_name(&path))));
 
@@ -1537,7 +1625,7 @@ impl EasyShowApp {
         }
     }
 
-    fn poll_thumbs(&mut self) {
+    fn poll_thumbs(&mut self, ctx: &egui::Context) {
         use crate::thumbs::ThumbEvent;
         while let Some(event) = self.thumbs.try_recv() {
             match event {
@@ -1546,14 +1634,15 @@ impl EasyShowApp {
                     if generation != self.thumb_generation {
                         continue;
                     }
+                    // 纹理在这里统一上传:网格、地图聚合与聚合查看页共用。
+                    // (此前只有网格会调用上传,导致进入地图后新解码的缩略图永远空白。)
+                    if !self.thumb_tex.contains_key(&path) {
+                        let texture = upload_thumb_texture(ctx, &image);
+                        self.thumb_tex.insert(path.clone(), texture);
+                    }
                     self.thumb_imgs.insert(path.clone(), image);
                     self.thumb_order.push_back(path);
-                    while self.thumb_order.len() > THUMB_CACHE_CAP {
-                        if let Some(old) = self.thumb_order.pop_front() {
-                            self.thumb_imgs.remove(&old);
-                            self.thumb_tex.remove(&old);
-                        }
-                    }
+                    self.evict_thumbs();
                 }
                 ThumbEvent::Failed { path, message } => {
                     self.thumb_inflight.remove(&path);
@@ -1566,6 +1655,35 @@ impl EasyShowApp {
                 }
             }
         }
+    }
+
+    /// 缩略图缓存超限时淘汰旧项,但尽量保留当前视口(地图聚合/查看页)需要的纹理。
+    fn evict_thumbs(&mut self) {
+        let mut excess = self.thumb_order.len().saturating_sub(THUMB_CACHE_CAP);
+        if excess == 0 {
+            return;
+        }
+        let wanted = std::mem::take(&mut self.last_thumb_wanted);
+        let rounds = self.thumb_order.len();
+        for _ in 0..rounds {
+            if excess == 0 {
+                break;
+            }
+            let Some(old) = self.thumb_order.pop_front() else { break };
+            if wanted.contains(&old) {
+                self.thumb_order.push_back(old);
+            } else {
+                self.thumb_imgs.remove(&old);
+                self.thumb_tex.remove(&old);
+                excess -= 1;
+            }
+        }
+        self.last_thumb_wanted = wanted;
+    }
+
+    /// 显式打开某个聚合时允许重试此前失败的缩略图。
+    pub fn retry_thumb(&mut self, path: &Path) {
+        self.thumb_failed.remove(path);
     }
 
     /// Queue a thumbnail for `path` unless present / already in flight / failed.
@@ -1702,6 +1820,8 @@ impl EasyShowApp {
                 if escape {
                     if self.fullscreen {
                         self.set_fullscreen(ctx, false);
+                    } else if self.map_focus.is_some() {
+                        self.return_to_map(ctx);
                     } else {
                         self.exit_to_grid();
                     }
@@ -1709,8 +1829,8 @@ impl EasyShowApp {
             }
             Mode::Map => {
                 if escape {
-                    if self.map_popup.is_some() {
-                        self.map_popup = None;
+                    if self.map_focus.is_some() {
+                        self.close_map_focus(ctx);
                     } else {
                         self.exit_map_to_grid(ctx);
                     }
@@ -1718,39 +1838,42 @@ impl EasyShowApp {
                 if map_key {
                     self.exit_map_to_grid(ctx);
                 }
-                if zoom_in {
-                    self.zoom_map_steps(1.0);
-                }
-                if zoom_out {
-                    self.zoom_map_steps(-1.0);
-                }
-                if fit_key {
-                    self.fit_map_to_photos();
-                }
-                if home {
-                    self.select(0);
-                }
-                if end {
-                    self.select(self.entries.len().saturating_sub(1));
-                }
-                if enter {
-                    self.open_selected_in_viewer(ctx);
+                // 聚合查看页打开时只响应 Esc / M,不要改动底层地图视野。
+                if self.map_focus.is_none() {
+                    if zoom_in {
+                        self.zoom_map_steps(1.0);
+                    }
+                    if zoom_out {
+                        self.zoom_map_steps(-1.0);
+                    }
+                    if fit_key {
+                        self.fit_map_to_photos();
+                    }
+                    if home {
+                        self.select(0);
+                    }
+                    if end {
+                        self.select(self.entries.len().saturating_sub(1));
+                    }
+                    if enter {
+                        self.open_selected_in_viewer(ctx);
+                    }
+                    let step = 80.0;
+                    if left {
+                        self.map.pan_px(step, 0.0);
+                    }
+                    if right {
+                        self.map.pan_px(-step, 0.0);
+                    }
+                    if up {
+                        self.map.pan_px(0.0, step);
+                    }
+                    if down {
+                        self.map.pan_px(0.0, -step);
+                    }
                 }
                 if delete_key {
                     self.request_delete();
-                }
-                let step = 80.0;
-                if left {
-                    self.map.pan_px(step, 0.0);
-                }
-                if right {
-                    self.map.pan_px(-step, 0.0);
-                }
-                if up {
-                    self.map.pan_px(0.0, step);
-                }
-                if down {
-                    self.map.pan_px(0.0, -step);
                 }
             }
         }
@@ -1820,7 +1943,7 @@ impl eframe::App for EasyShowApp {
         }
 
         self.poll_decode(&ctx);
-        self.poll_thumbs();
+        self.poll_thumbs(&ctx);
         #[cfg(feature = "formats")]
         self.poll_anim(&ctx);
         self.poll_geo_scan();

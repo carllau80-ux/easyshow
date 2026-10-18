@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 use eframe::egui::{self, Align2, Color32, CursorIcon, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::app::{file_name, EasyShowApp, Mode};
+use crate::ui::{draw_fitted, elide};
 use crate::geo::{self, ScreenCluster};
 use crate::i18n::{tr, Key};
 use crate::theme::Palette;
@@ -26,15 +27,11 @@ pub const CHINA_LON0: f64 = 73.4;
 pub const CHINA_LON1: f64 = 135.2;
 pub const CHINA_LAT0: f64 = 2.6;
 pub const CHINA_LAT1: f64 = 54.0;
-/// 聚合弹层最多展示的照片数。
-const POPUP_LIMIT: usize = 12;
 
-/// 聚合点弹出的照片网格。
+/// 聚合查看页:展示某个聚合下的全部照片(地图视野保持不变)。
 #[derive(Clone)]
-pub struct MapPopup {
-    pub members: Vec<usize>,
-    pub anchor: Pos2,
-    pub opened_at: f64,
+pub struct MapFocus {
+    pub members: Vec<PathBuf>,
 }
 
 struct MapColors {
@@ -471,7 +468,6 @@ fn interact(
         }
     }
 
-    let now = ui.input(|i| i.time);
     for (ci, cluster) in clusters.iter().enumerate() {
         let center = egui::pos2(rect.min.x + cluster.x, rect.min.y + cluster.y);
         let hit_rect = cluster_bounds(app.map.zoom, cluster.members.len(), center);
@@ -488,7 +484,6 @@ fn interact(
                 let idx = cluster.members[0];
                 app.select_with(idx, false, false);
                 if hit.double_clicked() {
-                    app.map_popup = None;
                     app.mode = Mode::Viewer;
                     app.load_current(ui.ctx());
                 }
@@ -498,14 +493,18 @@ fn interact(
                 app.map.center = geo::world_to_lonlat(world);
                 app.map.zoom = (app.map.zoom + 1.5).min(app.max_map_zoom());
                 app.tile_failed.clear();
-                app.map_popup = None;
             } else {
-                // 单击聚合:打开照片网格弹层
-                app.map_popup = Some(MapPopup {
-                    members: cluster.members.clone(),
-                    anchor: center,
-                    opened_at: now,
-                });
+                // 单击聚合:打开聚合查看页,展示该聚合的全部照片
+                let members: Vec<PathBuf> = cluster
+                    .members
+                    .iter()
+                    .filter_map(|&idx| app.entries.get(idx))
+                    .map(|entry| entry.path.clone())
+                    .collect();
+                for path in &members {
+                    app.retry_thumb(path);
+                }
+                app.map_focus = Some(MapFocus { members });
             }
         }
         if cluster.members.len() == 1 {
@@ -528,144 +527,217 @@ fn interact(
     }
 }
 
-/// 聚合点弹层:缩略图网格,单击选中、双击进入浏览。
-fn draw_popup(app: &mut EasyShowApp, ui: &egui::Ui) {
-    let Some(popup) = app.map_popup.clone() else { return };
-    let ctx = ui.ctx().clone();
-    let now = ctx.input(|i| i.time);
-    let palette = Palette::for_ui(ui);
-    let colors = colors(ui.visuals().dark_mode);
-    let text_color = ui.visuals().text_color();
-
-    let members: Vec<usize> = popup.members.iter().take(POPUP_LIMIT).copied().collect();
-    let tiles: Vec<(usize, PathBuf, Option<egui::TextureHandle>)> = members
-        .iter()
-        .filter_map(|&idx| {
-            let entry = app.entries.get(idx)?;
-            Some((idx, entry.path.clone(), app.thumb_tex.get(&entry.path).cloned()))
+/// 地图上优先请求缩略图的成员:优先大聚合,其次靠近屏幕中心;
+/// 总量设上限,避免上千个聚合把缩略图队列和纹理缓存挤爆。
+fn map_thumb_paths(app: &EasyShowApp, clusters: &[ScreenCluster]) -> Vec<PathBuf> {
+    const BUDGET: usize = 480;
+    let (cx, cy) = (app.map_area.x * 0.5, app.map_area.y * 0.5);
+    let mut order: Vec<usize> = (0..clusters.len()).collect();
+    order.sort_by(|&a, &b| {
+        let ca = &clusters[a];
+        let cb = &clusters[b];
+        cb.members.len().cmp(&ca.members.len()).then_with(|| {
+            let da = (ca.x - cx).powi(2) + (ca.y - cy).powi(2);
+            let db = (cb.x - cx).powi(2) + (cb.y - cy).powi(2);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         })
-        .collect();
-    if tiles.is_empty() {
-        app.map_popup = None;
+    });
+    let mut out = Vec::new();
+    'outer: for ci in order {
+        let cluster = &clusters[ci];
+        let (shown, _, _) = cluster_layout(app.map.zoom, cluster.members.len());
+        for &idx in cluster.members.iter().take(shown) {
+            if let Some(entry) = app.entries.get(idx) {
+                out.push(entry.path.clone());
+                if out.len() >= BUDGET {
+                    break 'outer;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 聚合查看页:覆盖地图区域,展示该聚合的全部照片。
+/// 不修改 `app.map` 的 center/zoom,关闭后回到原地图位置。
+fn draw_map_focus(
+    app: &mut EasyShowApp,
+    ui: &mut egui::Ui,
+    rect: Rect,
+    palette: &Palette,
+) {
+    let Some(focus) = app.map_focus.clone() else { return };
+    let lang = app.lang;
+    ui.painter().rect_filled(rect, 0.0, palette.canvas_bg);
+    if focus.members.is_empty() {
+        app.close_map_focus(ui.ctx());
         return;
     }
 
-    let tile = 62.0;
-    let gap = 8.0;
-    let cols = ((tiles.len() as f32).sqrt().ceil() as usize).clamp(1, 4);
-    let rows = (tiles.len() + cols - 1) / cols;
-    let width = cols as f32 * (tile + gap) + gap;
-    let height = rows as f32 * (tile + gap) + gap + 26.0;
-    let screen = ctx.content_rect();
-    let pos = egui::pos2(
-        popup.anchor.x.clamp(screen.left() + 8.0, (screen.right() - width - 8.0).max(screen.left() + 8.0)),
-        popup.anchor.y.clamp(screen.top() + 8.0, (screen.bottom() - height - 8.0).max(screen.top() + 8.0)),
+    // 头部:数量、返回提示与关闭按钮
+    let header = Rect::from_min_size(rect.min, Vec2::new(rect.width(), 40.0));
+    let painter = ui.painter();
+    painter.text(
+        header.left_center() + Vec2::new(14.0, 0.0),
+        Align2::LEFT_CENTER,
+        format!("{} {}", focus.members.len(), tr(lang, Key::Photos)),
+        FontId::proportional(14.0),
+        ui.visuals().text_color(),
     );
-
-    let mut close = false;
-    let mut select: Option<usize> = None;
-    let mut open: Option<usize> = None;
-    let area = egui::Area::new(ui.make_persistent_id("easyshow-map-popup"))
-        .fixed_pos(pos)
-        .order(egui::Order::Foreground)
-        .show(&ctx, |ui| {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
-            let painter = ui.painter();
-            painter.rect_filled(rect, 10.0, palette.card_bg);
-            painter.rect_stroke(rect, 10.0, Stroke::new(1.0, colors.border), StrokeKind::Inside);
-            painter.text(
-                rect.left_top() + Vec2::new(12.0, 9.0),
-                Align2::LEFT_TOP,
-                format!("{} {}", tiles.len(), tr(app.lang, Key::Photos)),
-                FontId::proportional(12.5),
-                text_color,
-            );
-            let close_rect = Rect::from_min_size(
-                egui::pos2(rect.right() - 26.0, rect.top() + 6.0),
-                Vec2::splat(18.0),
-            );
-            painter.text(
-                close_rect.center(),
-                Align2::CENTER_CENTER,
-                "×",
-                FontId::proportional(15.0),
-                palette.text_dim,
-            );
-            if ui
-                .interact(close_rect, ui.scope_id().with("map-popup-close"), Sense::click())
-                .clicked()
-            {
-                close = true;
-            }
-            for (i, (idx, _path, texture)) in tiles.iter().enumerate() {
-                let row = i / cols;
-                let col = i % cols;
-                let center = egui::pos2(
-                    rect.left() + gap + tile / 2.0 + col as f32 * (tile + gap),
-                    rect.top() + 26.0 + gap / 2.0 + tile / 2.0 + row as f32 * (tile + gap),
-                );
-                let radius = tile / 2.0 - 2.0;
-                match texture {
-                    Some(texture) => circular_image(
-                        painter,
-                        texture,
-                        center,
-                        radius,
-                        Stroke::new(1.0, colors.border),
-                    ),
-                    None => {
-                        painter.circle_filled(center, radius, colors.cluster_text.gamma_multiply(0.15));
-                        painter.circle_stroke(center, radius, Stroke::new(1.2, palette.accent));
-                    }
-                }
-                if app.entry_index() == Some(*idx) {
-                    painter.circle_stroke(center, radius + 2.0, Stroke::new(1.8, palette.accent));
-                }
-                let hit = ui.interact(
-                    Rect::from_center_size(center, Vec2::splat(tile)),
-                    ui.scope_id().with(("map-popup-item", i)),
-                    Sense::click(),
-                );
-                if hit.hovered() {
-                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-                }
-                if hit.clicked() {
-                    if hit.double_clicked() {
-                        open = Some(*idx);
-                    } else {
-                        select = Some(*idx);
-                    }
-                }
-                if let Some(entry) = app.entries.get(*idx) {
-                    hit.on_hover_text(file_name(&entry.path));
-                }
-            }
-        });
-
-    if close {
-        app.map_popup = None;
+    painter.text(
+        header.right_center() - Vec2::new(44.0, 0.0),
+        Align2::RIGHT_CENTER,
+        tr(lang, Key::BackToMap),
+        FontId::proportional(10.5),
+        palette.text_dim,
+    );
+    let close_rect = Rect::from_center_size(
+        egui::pos2(rect.right() - 20.0, header.center().y),
+        Vec2::splat(26.0),
+    );
+    painter.text(
+        close_rect.center(),
+        Align2::CENTER_CENTER,
+        "×",
+        FontId::proportional(18.0),
+        palette.text_dim,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(rect.left(), header.bottom() - 0.5),
+            egui::pos2(rect.right(), header.bottom() - 0.5),
+        ],
+        Stroke::new(1.0, palette.text_dim.gamma_multiply(0.25)),
+    );
+    if ui
+        .interact(
+            close_rect,
+            ui.make_persistent_id("map-focus-close"),
+            Sense::click(),
+        )
+        .clicked()
+    {
+        app.close_map_focus(ui.ctx());
         return;
     }
-    if let Some(idx) = select {
-        app.select_with(idx, false, false);
+
+    const TILE_W: f32 = 152.0;
+    const TILE_H: f32 = 146.0;
+    const IMG_H: f32 = 118.0;
+    const GAP: f32 = 10.0;
+    let area = Rect::from_min_max(
+        egui::pos2(rect.left() + 10.0, header.bottom() + 6.0),
+        egui::pos2(rect.right() - 10.0, rect.bottom() - 6.0),
+    );
+    let cols = (((area.width() + GAP) / (TILE_W + GAP)).floor() as usize).max(1);
+    let rows = focus.members.len().div_ceil(cols);
+    let total_h = rows as f32 * (TILE_H + GAP);
+    let by_path: std::collections::HashMap<&std::path::Path, usize> = app
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(idx, entry)| (entry.path.as_path(), idx))
+        .collect();
+    let index_of: Vec<Option<usize>> = focus
+        .members
+        .iter()
+        .map(|path| by_path.get(path.as_path()).copied())
+        .collect();
+
+    let mut wanted: Vec<PathBuf> = Vec::new();
+    let mut select: Option<PathBuf> = None;
+    let mut open: Option<PathBuf> = None;
+    ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("map-focus-scroll")
+            .auto_shrink([false, false])
+            .show_viewport(ui, |ui, viewport| {
+                ui.set_height(total_h);
+                let origin = ui.max_rect().min;
+                let pitch = TILE_H + GAP;
+                let first = (viewport.min.y / pitch).floor().max(0.0) as usize;
+                let last = (((viewport.max.y / pitch).ceil() as usize) + 1).min(rows);
+                let pre_first = first.saturating_sub(1);
+                let pre_last = (last + 1).min(rows);
+
+                for row in pre_first..pre_last {
+                    for col in 0..cols {
+                        let pos = row * cols + col;
+                        let Some(path) = focus.members.get(pos) else { break };
+                        wanted.push(path.clone());
+                    }
+                }
+                for row in first..last {
+                    for col in 0..cols {
+                        let pos = row * cols + col;
+                        let Some(path) = focus.members.get(pos) else { break };
+                        let idx = index_of[pos];
+                        let tile = Rect::from_min_size(
+                            egui::pos2(
+                                origin.x + col as f32 * (TILE_W + GAP),
+                                origin.y + row as f32 * pitch,
+                            ),
+                            Vec2::new(TILE_W, TILE_H),
+                        );
+                        let painter = ui.painter();
+                        painter.rect_filled(tile, egui::CornerRadius::same(8), palette.card_bg);
+                        let img = Rect::from_min_size(
+                            tile.min + Vec2::new(4.0, 4.0),
+                            Vec2::new(TILE_W - 8.0, IMG_H),
+                        );
+                        painter.rect_filled(img, egui::CornerRadius::same(6), palette.thumb_bg);
+                        if let Some(i) = idx {
+                            if let Some(entry) = app.entries.get(i) {
+                                if let Some(texture) = app.thumb_tex.get(&entry.path) {
+                                    draw_fitted(painter, texture.id(), img, texture.size_vec2());
+                                }
+                            }
+                        }
+                        let selected = idx.is_some() && app.entry_index() == idx;
+                        if selected {
+                            painter.rect_stroke(
+                                tile,
+                                egui::CornerRadius::same(8),
+                                Stroke::new(2.0, palette.accent),
+                                StrokeKind::Inside,
+                            );
+                        }
+                        painter.text(
+                            tile.center_bottom() - Vec2::new(0.0, 10.0),
+                            Align2::CENTER_CENTER,
+                            elide(&file_name(path), 18),
+                            FontId::proportional(11.0),
+                            palette.text_dim,
+                        );
+                        let response = ui.interact(
+                            tile,
+                            ui.make_persistent_id(("map-focus-tile", pos)),
+                            Sense::click(),
+                        );
+                        if response.double_clicked() {
+                            open = Some(path.clone());
+                        } else if response.clicked() {
+                            select = Some(path.clone());
+                        }
+                    }
+                }
+            });
+    });
+
+    app.set_visible_thumbs(wanted.clone());
+    for path in &wanted {
+        app.request_thumb(path);
     }
-    if let Some(idx) = open {
-        app.select_with(idx, false, false);
-        app.map_popup = None;
-        app.mode = Mode::Viewer;
-        app.load_current(&ctx);
+    // 首帧视口信息可能不完整:只要可见区还有缩略图没就绪,就继续出帧,
+    // 让下一帧补齐请求(否则点开后只加载第一行就停住)。
+    if wanted.iter().any(|path| !app.thumb_tex.contains_key(path)) {
+        ui.ctx().request_repaint();
     }
-    // 点击弹层之外 / Esc 关闭
-    let clicked_outside = ctx.input(|i| i.pointer.any_click())
-        && ctx
-            .input(|i| i.pointer.interact_pos())
-            .map(|p| !area.response.rect.contains(p))
-            .unwrap_or(false);
-    if clicked_outside && now > popup.opened_at + 0.05 {
-        app.map_popup = None;
+    if let Some(path) = select {
+        app.focus_photo(ui.ctx(), &path, false);
     }
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        app.map_popup = None;
+    if let Some(path) = open {
+        app.focus_photo(ui.ctx(), &path, true);
     }
 }
 
@@ -678,6 +750,10 @@ pub fn map_view(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
     let rect = response.rect;
     app.map_area = rect.size();
+    if app.map_focus.is_some() {
+        draw_map_focus(app, ui, rect, palette);
+        return;
+    }
     painter.rect_filled(rect, 0.0, map_colors.water);
 
     ensure_world_textures(app, ui.ctx());
@@ -704,23 +780,8 @@ pub fn map_view(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     let uses_gcj = kind == Some(TileKind::Amap);
     let clusters = collect_clusters(app, rect, uses_gcj);
 
-    // 聚合缩略图:只为实际展示的成员请求/保留缩略图
-    let mut needed: Vec<PathBuf> = Vec::new();
-    for cluster in &clusters {
-        let (shown, _, _) = cluster_layout(app.map.zoom, cluster.members.len());
-        for &idx in cluster.members.iter().take(shown) {
-            if let Some(entry) = app.entries.get(idx) {
-                needed.push(entry.path.clone());
-            }
-        }
-    }
-    if let Some(popup) = &app.map_popup {
-        for &idx in popup.members.iter().take(POPUP_LIMIT) {
-            if let Some(entry) = app.entries.get(idx) {
-                needed.push(entry.path.clone());
-            }
-        }
-    }
+    // 聚合缩略图:只为屏幕上优先的成员请求/保留纹理。
+    let needed = map_thumb_paths(app, &clusters);
     app.set_visible_thumbs(needed.clone());
     for path in &needed {
         app.request_thumb(path);
@@ -786,5 +847,4 @@ pub fn map_view(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     );
 
     interact(app, ui, &response, rect, &clusters);
-    draw_popup(app, ui);
 }

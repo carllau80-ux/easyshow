@@ -1098,7 +1098,7 @@ fn draw_timeline(app: &mut EasyShowApp, ui: &mut egui::Ui, layout: &GridLayout, 
     }
 }
 
-fn draw_fitted(painter: &egui::Painter, id: egui::TextureId, rect: egui::Rect, size: egui::Vec2) {
+pub(crate) fn draw_fitted(painter: &egui::Painter, id: egui::TextureId, rect: egui::Rect, size: egui::Vec2) {
     if size.x <= 0.0 || size.y <= 0.0 {
         return;
     }
@@ -1109,7 +1109,7 @@ fn draw_fitted(painter: &egui::Painter, id: egui::TextureId, rect: egui::Rect, s
     painter.image(id, dest, uv, egui::Color32::WHITE);
 }
 
-fn elide(text: &str, max_chars: usize) -> String {
+pub(crate) fn elide(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         text.to_string()
     } else {
@@ -1204,7 +1204,30 @@ pub fn canvas(app: &mut EasyShowApp, ui: &mut egui::Ui) {
 pub fn info_panel(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     let lang = app.lang;
     ui.add_space(8.0);
-    ui.label(egui::RichText::new(tr(lang, Key::Info)).strong());
+    let copy_text = if app.selected_folder.is_none() { clipboard_info(app) } else { String::new() };
+    let mut copy_clicked = false;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tr(lang, Key::Info)).strong());
+        if !copy_text.is_empty() {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button(tr(lang, Key::CopyInfo))
+                    .on_hover_text(tr(lang, Key::CopyInfo))
+                    .clicked()
+                {
+                    copy_clicked = true;
+                }
+                if app.info_copied_at.is_some_and(|t| ui.input(|i| i.time) - t < 1.6) {
+                    ui.weak(egui::RichText::new(tr(lang, Key::Copied)).size(10.5));
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+                }
+            });
+        }
+    });
+    if copy_clicked {
+        ui.ctx().copy_text(copy_text);
+        app.info_copied_at = Some(ui.input(|i| i.time));
+    }
     ui.add_space(2.0);
     if let Some(card) = app.selected_folder.and_then(|i| app.folder_cards.get(i)) {
         ui.add(egui::Label::new(&card.name).truncate());
@@ -1294,6 +1317,71 @@ pub fn info_panel(app: &mut EasyShowApp, ui: &mut egui::Ui) {
             ui.weak(tr(lang, Key::NoExif));
         }
     }
+}
+
+/// 信息面板的纯文本版本,供「复制信息」写入剪贴板。
+fn clipboard_info(app: &EasyShowApp) -> String {
+    let Some(info) = &app.info else { return String::new() };
+    let lang = app.lang;
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("{}: {}", tr(lang, Key::FileName), file_name(&info.path)));
+    if let Some((w, h)) = info.dims {
+        lines.push(format!("{}: {w} × {h}", tr(lang, Key::Dimensions)));
+    }
+    if let Some(size) = info.file_size {
+        lines.push(format!("{}: {}", tr(lang, Key::Size), human_size(size)));
+    }
+    if let Some(format) = info.format {
+        lines.push(format!("{}: {format}", tr(lang, Key::Format)));
+    }
+    if let Some(modified) = &info.modified {
+        lines.push(format!("{}: {modified}", tr(lang, Key::Modified)));
+    }
+
+    if let Some(exif) = &info.exif {
+        lines.push(String::new());
+        lines.push(tr(lang, Key::Exif).to_string());
+        let camera = match (&exif.make, &exif.model) {
+            (Some(make), Some(model)) => Some(format!("{make} {model}")),
+            (Some(make), None) => Some(make.clone()),
+            (None, Some(model)) => Some(model.clone()),
+            (None, None) => None,
+        };
+        if let Some(camera) = camera {
+            lines.push(format!("{}: {camera}", tr(lang, Key::Camera)));
+        }
+        if let Some(lens) = &exif.lens {
+            lines.push(format!("{}: {lens}", tr(lang, Key::Lens)));
+        }
+        if let Some(f) = &exif.f_number {
+            lines.push(format!("{}: {f}", tr(lang, Key::Aperture)));
+        }
+        if let Some(exposure) = &exif.exposure {
+            lines.push(format!("{}: {exposure}", tr(lang, Key::Shutter)));
+        }
+        if let Some(iso) = exif.iso {
+            lines.push(format!("{}: {iso}", tr(lang, Key::Iso)));
+        }
+        if let Some(focal) = &exif.focal_length {
+            lines.push(format!("{}: {focal}", tr(lang, Key::FocalLength)));
+        }
+        if let Some(taken) = &exif.date_time {
+            lines.push(format!("{}: {taken}", tr(lang, Key::Taken)));
+        }
+        if let Some((lat, lon)) = exif.gps {
+            let coords = format!("{lat:.6}, {lon:.6}");
+            let place = app.place.as_ref().and_then(|p| p.label());
+            lines.push(format!(
+                "{}: {}",
+                tr(lang, Key::Location),
+                place.clone().unwrap_or_else(|| coords.clone())
+            ));
+            if place.is_some() {
+                lines.push(format!("{}: {coords}", tr(lang, Key::Coordinates)));
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 fn kv(ui: &mut egui::Ui, label: &str, value: String) {

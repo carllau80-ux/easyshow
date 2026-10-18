@@ -137,6 +137,10 @@ pub enum Key {
     FolderHint,
     DoubleClickEnter,
     ChinaMapAttribution,
+    FileName,
+    CopyInfo,
+    Copied,
+    BackToMap,
 }
 
 pub fn tr(lang: Lang, key: Key) -> &'static str {
@@ -232,13 +236,17 @@ pub fn tr(lang: Lang, key: Key) -> &'static str {
         (Lang::Zh, Pause) => "暂停",
         (Lang::Zh, Frames) => "帧",
         (Lang::Zh, Photos) => "张照片",
-        (Lang::Zh, MapHint) => "单击缩略图聚合查看 · 双击进入浏览",
+        (Lang::Zh, MapHint) => "单击聚合查看全部照片 · 双击聚合放大 · 双击单张查看",
         (Lang::Zh, TimeScanning) => "读取拍摄时间",
         (Lang::Zh, Timeline) => "时间轴",
         (Lang::Zh, FolderScanning) => "正在扫描子目录…",
         (Lang::Zh, FolderHint) => "{n} 张照片 · 双击进入",
         (Lang::Zh, DoubleClickEnter) => "双击进入该文件夹",
         (Lang::Zh, ChinaMapAttribution) => "省界数据 © DataV.GeoAtlas",
+        (Lang::Zh, FileName) => "文件名",
+        (Lang::Zh, CopyInfo) => "复制信息",
+        (Lang::Zh, Copied) => "已复制",
+        (Lang::Zh, BackToMap) => "Esc 返回地图",
 
         (Lang::En, Open) => "Open Image…",
         (Lang::En, OpenFolder) => "Open Folder",
@@ -330,12 +338,16 @@ pub fn tr(lang: Lang, key: Key) -> &'static str {
         (Lang::En, Pause) => "Pause",
         (Lang::En, Frames) => "frames",
         (Lang::En, Photos) => "photos",
-        (Lang::En, MapHint) => "Click a cluster for its photos · double-click to view",
+        (Lang::En, MapHint) => "Click a cluster for all photos · double-click a cluster to zoom · double-click a photo to view",
         (Lang::En, TimeScanning) => "Reading capture time",
         (Lang::En, Timeline) => "Timeline",
         (Lang::En, FolderScanning) => "Scanning subfolders…",
         (Lang::En, FolderHint) => "{n} photos · double-click to open",
         (Lang::En, DoubleClickEnter) => "Double-click to open this folder",
         (Lang::En, ChinaMapAttribution) => "Province boundaries © DataV.GeoAtlas",
+        (Lang::En, FileName) => "File name",
+        (Lang::En, CopyInfo) => "Copy info",
+        (Lang::En, Copied) => "Copied",
+        (Lang::En, BackToMap) => "Esc to return to map",
     }
 }
