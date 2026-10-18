@@ -1,6 +1,7 @@
 name: release
 
-# 三平台安装包构建(完整版 full + 轻量版 lite),打 v* 标签时自动创建 GitHub Release 并附带产物。
+# 三平台安装包构建(完整版),打 v* 标签时自动创建 GitHub Release 并附带产物。
+# 轻量版(lite)自 0.2.3 起冻结,不再随新版发布。
 # 需要能访问 GitHub 的环境;受限网络下的本机构建见 packaging/ 脚本。
 on:
   workflow_dispatch:
@@ -12,38 +13,36 @@ permissions:
 
 jobs:
   linux:
-    name: Linux (.deb / tar.gz / AppImage × full/lite)
+    name: Linux (.deb / tar.gz / AppImage)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: deb + tarball (full + lite)
+      - name: deb + tarball
         run: bash packaging/build-linux.sh
-      - name: AppImage (full + lite)
+      - name: AppImage
         run: |
           set -euo pipefail
           VERSION="$(awk -F'"' '/^\[workspace.package\]/{f=1} f&&/^version/{print $2; exit}' Cargo.toml)"
           curl -fsSL -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
           mkdir -p dist/linux
-          for variant in full lite; do
-            if [ "$variant" = "full" ]; then APP=easyshow; BIN=build/lin/easyshow; else APP=easyshow-lite; BIN=build/lin/easyshow-lite; fi
-            APPDIR="build/appimage/EasyShow-$variant.AppDir"
-            rm -rf "$APPDIR"; mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-            install -m755 "$BIN" "$APPDIR/usr/bin/$APP"
-            sed "s#Exec=/usr/bin/$APP#Exec=$APP#" "build/deb/${APP}_${VERSION}_amd64/usr/share/applications/$APP.desktop" > "$APPDIR/$APP.desktop"
-            cp assets/icon-256.png "$APPDIR/$APP.png"
-            cp assets/icon-256.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP.png"
-            ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/linux/EasyShow-${VERSION}-${variant}-x86_64.AppImage"
-          done
+          APP=easyshow; BIN=build/lin/easyshow
+          APPDIR="build/appimage/EasyShow.AppDir"
+          rm -rf "$APPDIR"; mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+          install -m755 "$BIN" "$APPDIR/usr/bin/$APP"
+          sed "s#Exec=/usr/bin/$APP#Exec=$APP#" "build/deb/${APP}_${VERSION}_amd64/usr/share/applications/$APP.desktop" > "$APPDIR/$APP.desktop"
+          cp assets/icon-256.png "$APPDIR/$APP.png"
+          cp assets/icon-256.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP.png"
+          ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/linux/EasyShow-${VERSION}-x86_64.AppImage"
       - uses: actions/upload-artifact@v4
         with:
           name: easyshow-linux
           path: dist/linux/*
 
   windows:
-    name: Windows (zip / Setup.exe × full/lite)
+    name: Windows (zip / Setup.exe)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +73,7 @@ jobs:
           fi
       - name: Install NSIS
         run: choco install nsis -y --no-progress
-      - name: Build + package (full + lite)
+      - name: Build + package
         shell: bash
         env:
           MAKENSIS: /c/Program Files (x86)/NSIS/makensis.exe
@@ -98,7 +97,7 @@ jobs:
           path: dist/windows/*
 
   macos:
-    name: macOS (.app / .dmg × full/lite, universal)
+    name: macOS (.app / .dmg, universal)
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -106,7 +105,7 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
-      - name: Bundle + dmg (full + lite)
+      - name: Bundle + dmg
         run: |
           set -o pipefail
           if ! bash packaging/macos/make-bundle.sh universal both > build-bundle.log 2>&1; then
@@ -144,11 +143,8 @@ jobs:
             dist/**/*.dmg
           generate_release_notes: true
           body: |
-            EasyShow 0.2.x — 轻量级跨平台图片查看器
+            EasyShow — 轻量级跨平台图片查看器(完整版)
 
-            **两个变体**
-            - 完整版 full:含 HEIC/AVIF(运行时 libheif;Windows 包内附带 DLL 闭包)
-            - 轻量版 lite:不含 HEIC/AVIF 相关代码,零外部依赖
-
-            **支持格式**:JPEG / PNG / GIF / WebP / BMP / TIFF / ICO / TGA / PNM / QOI;完整版另支持 HEIC / AVIF
+            **支持格式**:JPEG / PNG / GIF(动图)/ WebP(动图)/ BMP / TIFF / ICO / TGA / PNM / QOI,
+            HEIC / AVIF(运行时 libheif;Windows 包内附带 DLL 闭包),JPEG XL / SVG / PSD / HDR / EXR
             **功能**:目录树、缩略图网格(视口优先)、单图浏览、EXIF/GPS 信息面板、批量删除(回收站,默认只读)、幻灯片(整目录/所选批量)、深浅主题、中英双语

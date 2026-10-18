@@ -1,0 +1,24 @@
+# 第三方组件与许可
+
+EasyShow 本体采用 MIT OR Apache-2.0。以下为随二进制分发的主要第三方组件(均为纯 Rust 或仅按需运行时加载):
+
+| 组件 | 用途 | 许可 |
+|---|---|---|
+| image / zune-jpeg / fast_image_resize | 解码与缩放 | MIT / Apache-2.0 |
+| eframe / egui | GUI | MIT / Apache-2.0 |
+| kamadak-exif | EXIF | BSD-2-Clause |
+| libloading + libheif(运行时加载) | HEIC/AVIF | libloading MIT;libheif LGPL-2.1(动态链接,独立组件) |
+| ureq / rustls / ring / webpki-roots | HTTPS(地名/瓦片) | MIT / Apache-2.0 / ISC |
+| serde_json | JSON | MIT / Apache-2.0 |
+| jxl-oxide | JPEG XL 解码 | Apache-2.0 |
+| resvg / usvg / tiny-skia / fontdb | SVG 渲染与字体 | MPL-2.0 / MIT / BSD-3-Clause |
+| psd | PSD 合成图 | MIT |
+| exr(image 的 exr 特性) | OpenEXR 解码 | BSD-3-Clause |
+| image-webp | 动画 WebP | MIT / Apache-2.0 |
+| gif(image 的 gif 特性) | 动画 GIF | MIT / Apache-2.0 |
+| Natural Earth / world-atlas | 离线世界地图 | Public Domain / ISC(见 assets/map/LICENSE-world-atlas.txt) |
+| Phosphor Icons | 工具栏图标 | MIT(见 assets/fonts/LICENSE-Phosphor.txt) |
+
+- `resvg` 系列为 MPL-2.0:本项目以库的形式静态链接使用,**未修改其源码**;其源码可从 crates.io 获取。
+- `libheif` 仅在完整版中通过运行时 `dlopen` 使用(Windows 安装包随附 DLL,Linux 依赖系统 `libheif1`,macOS 打包内置),属于独立进程外组件。
+- 在线地图瓦片/地名服务:地图数据 © OpenStreetMap contributors(ODbL)或 © 高德地图,使用条款由对应服务方规定。

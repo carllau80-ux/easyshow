@@ -6,8 +6,9 @@ use crate::error::{Error, Result};
 use crate::image_buf::ImageBuf;
 
 /// Decode → apply EXIF orientation → downscale so the long edge ≤ `max_edge`.
+/// Vector formats (SVG) are rendered directly at thumbnail size.
 pub fn make_thumbnail(path: &Path, max_edge: u32) -> Result<ImageBuf> {
-    let mut image = crate::codec::decode_file(path)?;
+    let mut image = crate::codec::decode_file_scaled(path, Some((max_edge, max_edge)))?;
     if let Some(orientation) = crate::exif::orientation_from_file(path) {
         image = crate::exif::apply_orientation(image, orientation);
     }

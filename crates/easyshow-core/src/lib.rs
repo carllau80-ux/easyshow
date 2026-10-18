@@ -12,19 +12,27 @@ pub mod thumb;
 
 use std::path::Path;
 
-pub use codec::{decode_file, from_extension, probe, Format};
+pub use codec::{decode_file, decode_file_scaled, from_extension, probe, Format};
 pub use error::{Error, Result};
 pub use exif::{read_gps, read_summary, ExifSummary};
 pub use image_buf::ImageBuf;
 
 /// Image dimensions without decoding pixels (JPEG/PNG/... read headers;
-/// HEIC/AVIF query the container, with the `heic` feature).
+/// HEIC/AVIF query the container with the `heic` feature; JPEG XL / PSD / SVG
+/// read their headers/containers with the `formats` feature).
 pub fn image_dimensions(path: &Path) -> Result<(u32, u32)> {
-    match codec::detect_format(path) {
+    if let Some(format) = codec::detect_format(path) {
+        let _ = format;
         #[cfg(feature = "heic")]
-        Some(Format::Heif | Format::Avif) => codec::heif::dimensions(path),
-        _ => image::image_dimensions(path)
-            .map(|(w, h)| (w, h))
-            .map_err(|e| Error::Decode(e.to_string())),
+        if matches!(format, Format::Heif | Format::Avif) {
+            return codec::heif::dimensions(path);
+        }
+        #[cfg(feature = "formats")]
+        if matches!(format, Format::Svg | Format::Jxl | Format::Psd) {
+            return codec::formats::dimensions(path, format);
+        }
     }
+    image::image_dimensions(path)
+        .map(|(w, h)| (w, h))
+        .map_err(|e| Error::Decode(e.to_string()))
 }

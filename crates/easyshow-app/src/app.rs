@@ -41,6 +41,17 @@ pub struct CurrentImage {
     pub downscaled: bool,
 }
 
+/// 动图播放状态:后台线程流式解码,UI 按帧延迟播放。
+#[cfg(feature = "formats")]
+pub struct AnimState {
+    player: crate::anim::AnimPlayer,
+    queue: VecDeque<(Arc<ImageBuf>, u32)>,
+    next_at: f64,
+    playing: bool,
+    frames: u32,
+    active: bool,
+}
+
 /// Everything the right-hand info panel shows about one file.
 pub struct InfoData {
     pub path: PathBuf,
@@ -142,6 +153,11 @@ pub struct EasyShowApp {
     pub world_land: Option<egui::TextureHandle>,
     pub world_borders: Option<egui::TextureHandle>,
     pub world_map_loaded: bool,
+    /// 地图上聚合点的缩略图弹层。
+    pub map_popup: Option<crate::map::MapPopup>,
+    // --- 动图(完整版;GIF/WebP) ---
+    #[cfg(feature = "formats")]
+    anim: Option<AnimState>,
 }
 
 /// 平台根节点:
@@ -363,6 +379,9 @@ impl EasyShowApp {
             world_land: None,
             world_borders: None,
             world_map_loaded: false,
+            map_popup: None,
+            #[cfg(feature = "formats")]
+            anim: None,
         };
         app.geocode.sync_config(&app.net);
         match path {
@@ -411,6 +430,7 @@ impl EasyShowApp {
         }
         self.selection_anchor = self.selected;
         self.slideshow = None;
+        self.stop_anim();
         self.thumb_generation += 1;
         self.thumb_inflight.clear();
         // 目录切换:重置地图/地名状态(位置扫描在进入地图模式时按需启动)
@@ -421,6 +441,7 @@ impl EasyShowApp {
         self.geo_fitted = false;
         self.place = None;
         self.place_loading = false;
+        self.map_popup = None;
         self.tile_tex.clear();
         self.tile_order.clear();
         self.tile_inflight.clear();
@@ -463,6 +484,7 @@ impl EasyShowApp {
         }
         self.mode = Mode::Grid;
         self.slideshow = None;
+        self.stop_anim();
         self.refresh_info();
     }
 
@@ -792,6 +814,7 @@ impl EasyShowApp {
 
     pub fn exit_map_to_grid(&mut self, ctx: &egui::Context) {
         self.mode = Mode::Grid;
+        self.map_popup = None;
         self.refresh_info();
         let title = self
             .current_path()
@@ -926,6 +949,118 @@ impl EasyShowApp {
     }
 
     // ------------------------------------------------------------------
+    // 动图(GIF / WebP;完整版)
+    // ------------------------------------------------------------------
+
+    /// 开始播放动图(仅 GIF/WebP;其他格式直接返回)。
+    #[cfg(feature = "formats")]
+    fn start_anim(&mut self, ctx: &egui::Context, path: &Path) {
+        self.stop_anim();
+        let cap = self.decode_cap(ctx);
+        if let Some(player) = crate::anim::AnimPlayer::start(path, Some(cap)) {
+            self.anim = Some(AnimState {
+                player,
+                queue: VecDeque::new(),
+                next_at: 0.0,
+                playing: true,
+                frames: 0,
+                active: false,
+            });
+        }
+    }
+
+    pub fn stop_anim(&mut self) {
+        #[cfg(feature = "formats")]
+        {
+            self.anim = None;
+        }
+    }
+
+    #[cfg(feature = "formats")]
+    fn poll_anim(&mut self, ctx: &egui::Context) {
+        let Some(mut state) = self.anim.take() else { return };
+        let now = ctx.input(|i| i.time);
+        while let Some(event) = state.player.try_recv() {
+            match event {
+                crate::anim::AnimEvent::Info { frames } => state.frames = frames,
+                crate::anim::AnimEvent::Frame { image, delay_ms } => {
+                    state.queue.push_back((image, delay_ms));
+                    while state.queue.len() > 4 {
+                        state.queue.pop_front();
+                    }
+                }
+                crate::anim::AnimEvent::Failed { message } => log::warn!("anim: {message}"),
+                crate::anim::AnimEvent::Done => {}
+            }
+        }
+        if state.playing {
+            if !state.queue.is_empty() && now >= state.next_at {
+                if let Some((image, delay)) = state.queue.pop_front() {
+                    state.next_at = now + (delay.max(20) as f64) / 1000.0;
+                    state.active = true;
+                    self.apply_anim_frame(ctx, image);
+                }
+            }
+            let until = (state.next_at - now).max(0.01);
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(until));
+        }
+        self.anim = Some(state);
+    }
+
+    #[cfg(feature = "formats")]
+    fn apply_anim_frame(&mut self, ctx: &egui::Context, image: Arc<ImageBuf>) {
+        if let Some(current) = &mut self.current {
+            current.original = image.clone();
+            current.display = image.clone();
+            let color = egui::ColorImage::from_rgba_unmultiplied(
+                [image.width as usize, image.height as usize],
+                &image.rgba,
+            );
+            let _ = current.texture.set(color, egui::TextureOptions::LINEAR);
+            current.downscaled = true;
+        } else if let Some(path) = self.current_path().cloned() {
+            let texture = upload_texture(ctx, &image);
+            self.current = Some(CurrentImage {
+                path,
+                original: image.clone(),
+                display: image,
+                texture,
+                downscaled: true,
+            });
+            self.loading = false;
+        }
+        self.refit_if_needed();
+    }
+
+    /// 当前图是动图且已经出过帧。
+    #[cfg(feature = "formats")]
+    pub fn anim_active(&self) -> bool {
+        self.anim.as_ref().map(|s| s.active).unwrap_or(false)
+    }
+
+    #[cfg(feature = "formats")]
+    pub fn anim_playing(&self) -> bool {
+        self.anim.as_ref().map(|s| s.playing).unwrap_or(false)
+    }
+
+    #[cfg(feature = "formats")]
+    pub fn anim_frames(&self) -> u32 {
+        self.anim.as_ref().map(|s| s.frames).unwrap_or(0)
+    }
+
+    /// 播放/暂停动图。
+    #[cfg(feature = "formats")]
+    pub fn toggle_anim(&mut self, ctx: &egui::Context) {
+        if let Some(state) = &mut self.anim {
+            state.playing = !state.playing;
+            if state.playing {
+                state.next_at = 0.0;
+            }
+            ctx.request_repaint();
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Theme / language
     // ------------------------------------------------------------------
 
@@ -981,6 +1116,10 @@ impl EasyShowApp {
         self.generation += 1;
         self.full_requested = false;
         self.error = None;
+
+        // GIF/WebP:并行启动动图解码,帧到达后接管显示(静态解码仍先出首帧)。
+        #[cfg(feature = "formats")]
+        self.start_anim(ctx, &path);
 
         if let Some((image, downscaled)) = self.prefetch.remove(&path) {
             // 预取命中:零解码,直接上屏
@@ -1383,7 +1522,14 @@ impl EasyShowApp {
                 }
             }
             Mode::Map => {
-                if escape || map_key {
+                if escape {
+                    if self.map_popup.is_some() {
+                        self.map_popup = None;
+                    } else {
+                        self.exit_map_to_grid(ctx);
+                    }
+                }
+                if map_key {
                     self.exit_map_to_grid(ctx);
                 }
                 if zoom_in {
@@ -1489,6 +1635,8 @@ impl eframe::App for EasyShowApp {
 
         self.poll_decode(&ctx);
         self.poll_thumbs();
+        #[cfg(feature = "formats")]
+        self.poll_anim(&ctx);
         self.poll_geo_scan();
         self.poll_geocode();
         self.poll_tiles(&ctx);

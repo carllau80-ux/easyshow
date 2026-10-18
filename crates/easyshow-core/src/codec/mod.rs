@@ -1,10 +1,16 @@
 //! Decode dispatch: magic-byte probing, a fast zune-jpeg path for JPEG, the
 //! `image` crate for everything else, and (with the `heic` feature)
 //! runtime-loaded libheif for HEIC/AVIF.
+//!
+//! With the `formats` feature, JPEG XL / SVG / PSD get dedicated pure-Rust
+//! decoders (see [`formats`]); HDR/EXR go through the `image` crate features
+//! and are tone-mapped into sRGB.
 
 pub mod probe;
 #[cfg(feature = "heic")]
 pub mod heif;
+#[cfg(feature = "formats")]
+pub mod formats;
 
 use std::io::Read;
 use std::path::Path;
@@ -14,8 +20,10 @@ use crate::image_buf::ImageBuf;
 pub use probe::{from_extension, probe, Format};
 
 /// Detect a file's format: magic bytes first, extension as fallback.
+///
+/// Reads a 2 KiB head so that XML-based formats (SVG) can be recognized.
 pub fn detect_format(path: &Path) -> Option<Format> {
-    let mut head = [0u8; 32];
+    let mut head = [0u8; 2048];
     let n = std::fs::File::open(path)
         .and_then(|mut f| f.read(&mut head))
         .unwrap_or(0);
@@ -24,12 +32,27 @@ pub fn detect_format(path: &Path) -> Option<Format> {
 
 /// Decode any supported image file into a tightly packed RGBA buffer.
 pub fn decode_file(path: &Path) -> Result<ImageBuf> {
-    let format = detect_format(path).ok_or_else(|| Error::UnsupportedFormat(path.display().to_string()))?;
+    decode_file_scaled(path, None)
+}
+
+/// Like [`decode_file`], but tells vector formats (SVG) the target pixel size
+/// so they can render directly at display/thumbnail resolution.
+pub fn decode_file_scaled(path: &Path, target: Option<(u32, u32)>) -> Result<ImageBuf> {
+    #[cfg(not(feature = "formats"))]
+    let _ = target;
+    let format =
+        detect_format(path).ok_or_else(|| Error::UnsupportedFormat(path.display().to_string()))?;
 
     match format {
         Format::Jpeg => decode_jpeg(path),
         #[cfg(feature = "heic")]
         Format::Heif | Format::Avif => heif::decode(path),
+        #[cfg(feature = "formats")]
+        Format::Svg => formats::decode_svg(path, target),
+        #[cfg(feature = "formats")]
+        Format::Jxl => formats::decode_jxl(path),
+        #[cfg(feature = "formats")]
+        Format::Psd => formats::decode_psd(path),
         _ => decode_via_image(path),
     }
 }
@@ -68,9 +91,55 @@ fn decode_jpeg_fast(path: &Path) -> Result<ImageBuf> {
 
 fn decode_via_image(path: &Path) -> Result<ImageBuf> {
     let img = image::open(path).map_err(|e| Error::Decode(e.to_string()))?;
-    let rgba = img.to_rgba8();
-    let (width, height) = rgba.dimensions();
-    Ok(ImageBuf::new(width, height, rgba.into_raw()))
+    dynamic_to_image_buf(img)
+}
+
+/// Convert a `DynamicImage` to 8-bit RGBA. Floating-point images (HDR, EXR,
+/// float JPEG XL) are tone-mapped through a highlight-compressing curve and
+/// sRGB transfer instead of a hard clamp.
+pub(crate) fn dynamic_to_image_buf(img: image::DynamicImage) -> Result<ImageBuf> {
+    use image::DynamicImage as D;
+    let buf = match img {
+        D::ImageRgb32F(buf) => tone_map_f32(buf.width(), buf.height(), buf.as_raw(), 3),
+        D::ImageRgba32F(buf) => tone_map_f32(buf.width(), buf.height(), buf.as_raw(), 4),
+        other => {
+            let rgba = other.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            ImageBuf::new(w, h, rgba.into_raw())
+        }
+    };
+    Ok(buf)
+}
+
+/// Linear f32 samples → sRGB u8. If the image is SDR (≤1.0) this is just the
+/// sRGB transfer; HDR content gets a Reinhard highlight roll-off first.
+fn tone_map_f32(width: u32, height: u32, samples: &[f32], channels: usize) -> ImageBuf {
+    let max = samples
+        .chunks_exact(channels)
+        .map(|px| px[0].max(px[1]).max(px[2]))
+        .fold(0.0f32, f32::max);
+    let compress = max > 1.02;
+    let map = |v: f32| -> u8 {
+        let v = v.max(0.0);
+        let v = if compress { v / (1.0 + v) } else { v.min(1.0) };
+        srgb_encode(v)
+    };
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    for px in samples.chunks_exact(channels) {
+        let a = if channels == 4 { (px[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8 } else { 255 };
+        rgba.extend_from_slice(&[map(px[0]), map(px[1]), map(px[2]), a]);
+    }
+    ImageBuf::new(width, height, rgba)
+}
+
+fn srgb_encode(v: f32) -> u8 {
+    let v = v.clamp(0.0, 1.0);
+    let s = if v <= 0.003_130_8 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0 + 0.5) as u8
 }
 
 #[cfg(test)]
@@ -81,11 +150,6 @@ mod tests {
         let dir = std::env::temp_dir().join("easyshow-core-tests");
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(name)
-    }
-
-    #[cfg(feature = "heic")]
-    fn testdata(name: &str) -> std::path::PathBuf {
-        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata")).join(name)
     }
 
     #[test]
@@ -119,10 +183,21 @@ mod tests {
         assert!((60..=130).contains(&px[2]), "blue channel out of range: {px:?}");
     }
 
+    #[test]
+    fn tone_maps_hdr_highlights() {
+        // 线性 SDR:0.5 → sRGB ≈ 188
+        let sdr = tone_map_f32(1, 1, &[0.5, 0.5, 0.5], 3);
+        assert!((180..=195).contains(&sdr.rgba[0]), "sdr 0.5 -> {}", sdr.rgba[0]);
+        // HDR 高光被压缩而不是截断;1.0 与 4.0 都应可区分且 <= 255
+        let hdr = tone_map_f32(2, 1, &[1.0, 1.0, 1.0, 4.0, 4.0, 4.0], 3);
+        assert!(hdr.rgba[0] < 255);
+        assert!(hdr.rgba[4] > hdr.rgba[0]);
+    }
+
     #[cfg(feature = "heic")]
     #[test]
     fn decodes_hevc_heic_sample() {
-        let path = testdata("sample.heic");
+        let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata")).join("sample.heic");
         if !path.exists() {
             eprintln!("skip: {} missing", path.display());
             return;
@@ -140,7 +215,7 @@ mod tests {
     #[cfg(feature = "heic")]
     #[test]
     fn decodes_av1_heif_sample() {
-        let path = testdata("sample-av1.heic");
+        let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata")).join("sample-av1.heic");
         if !path.exists() {
             eprintln!("skip: {} missing", path.display());
             return;

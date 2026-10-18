@@ -119,6 +119,17 @@ pub enum Key {
     MapPhotos,
     MapOfflineHint,
     OnlinePrivacy,
+    // 动图 / 地图弹层
+    #[cfg_attr(not(feature = "formats"), allow(dead_code))]
+    Animated,
+    #[cfg_attr(not(feature = "formats"), allow(dead_code))]
+    Play,
+    #[cfg_attr(not(feature = "formats"), allow(dead_code))]
+    Pause,
+    #[cfg_attr(not(feature = "formats"), allow(dead_code))]
+    Frames,
+    Photos,
+    MapHint,
 }
 
 pub fn tr(lang: Lang, key: Key) -> &'static str {
@@ -208,6 +219,12 @@ pub fn tr(lang: Lang, key: Key) -> &'static str {
         (Lang::Zh, MapPhotos) => "带位置 {n}/{m}",
         (Lang::Zh, MapOfflineHint) => "离线世界地图 · 设置中可开启在线底图",
         (Lang::Zh, OnlinePrivacy) => "开启后坐标与瓦片请求会发送给对应的在线服务",
+        (Lang::Zh, Animated) => "动图",
+        (Lang::Zh, Play) => "播放",
+        (Lang::Zh, Pause) => "暂停",
+        (Lang::Zh, Frames) => "帧",
+        (Lang::Zh, Photos) => "张照片",
+        (Lang::Zh, MapHint) => "单击缩略图聚合查看 · 双击进入浏览",
 
         (Lang::En, Open) => "Open Image…",
         (Lang::En, OpenFolder) => "Open Folder",
@@ -293,5 +310,11 @@ pub fn tr(lang: Lang, key: Key) -> &'static str {
         (Lang::En, MapPhotos) => "{n}/{m} with location",
         (Lang::En, MapOfflineHint) => "Offline world map · enable online tiles in Settings",
         (Lang::En, OnlinePrivacy) => "When enabled, coordinates and tile requests go to the selected service",
+        (Lang::En, Animated) => "Animated",
+        (Lang::En, Play) => "Play",
+        (Lang::En, Pause) => "Pause",
+        (Lang::En, Frames) => "frames",
+        (Lang::En, Photos) => "photos",
+        (Lang::En, MapHint) => "Click a cluster for its photos · double-click to view",
     }
 }

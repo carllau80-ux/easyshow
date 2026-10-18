@@ -134,19 +134,30 @@ pub fn orientation_from_file(path: &Path) -> Option<u16> {
 }
 
 fn read_exif(path: &Path) -> Option<exif::Exif> {
-    match crate::codec::detect_format(path) {
-        #[cfg(feature = "heic")]
-        Some(Format::Heif | Format::Avif) => {
-            let bytes = crate::codec::heif::exif_bytes(path).ok()?;
-            let tiff = locate_tiff(&bytes)?;
-            exif::Reader::new().read_raw(tiff.to_vec()).ok()
-        }
-        _ => {
-            let file = std::fs::File::open(path).ok()?;
-            let mut reader = BufReader::new(file);
-            exif::Reader::new().read_from_container(&mut reader).ok()
-        }
+    let format = crate::codec::detect_format(path);
+
+    #[cfg(feature = "heic")]
+    if matches!(format, Some(Format::Heif | Format::Avif)) {
+        let bytes = crate::codec::heif::exif_bytes(path).ok()?;
+        let tiff = locate_tiff(&bytes)?;
+        return exif::Reader::new().read_raw(tiff.to_vec()).ok();
     }
+
+    // JPEG XL 的 EXIF 存放在容器的 Exif box 中(tiff 流,可能带 Exif\0\0 前缀)。
+    #[cfg(feature = "formats")]
+    if matches!(format, Some(Format::Jxl)) {
+        use image::ImageDecoder;
+        let file = std::fs::File::open(path).ok()?;
+        let mut decoder = jxl_oxide::integration::JxlDecoder::new(file).ok()?;
+        let bytes = decoder.exif_metadata().ok()??;
+        let tiff = bytes.strip_prefix(b"Exif\0\0").unwrap_or(&bytes);
+        return exif::Reader::new().read_raw(tiff.to_vec()).ok();
+    }
+
+    let _ = &format;
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = BufReader::new(file);
+    exif::Reader::new().read_from_container(&mut reader).ok()
 }
 
 /// HEIF metadata items store EXIF either as `Exif\0\0` + TIFF, as a raw TIFF

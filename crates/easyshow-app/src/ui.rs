@@ -137,6 +137,24 @@ pub fn toolbar(app: &mut EasyShowApp, ui: &mut egui::Ui) {
             }
         }
 
+        // 动图播放/暂停(GIF / WebP,完整版)
+        #[cfg(feature = "formats")]
+        if app.mode == Mode::Viewer && app.anim_active() {
+            toolbar_sep(ui);
+            let (icon, tip) = if app.anim_playing() {
+                (icons::PAUSE, tr(lang, Key::Pause))
+            } else {
+                (icons::PLAY, tr(lang, Key::Play))
+            };
+            if icon_button(ui, icon, tip, true).clicked() {
+                app.toggle_anim(ui.ctx());
+            }
+            let frames = app.anim_frames();
+            if frames > 0 {
+                ui.weak(format!("{frames} {}", tr(lang, Key::Frames)));
+            }
+        }
+
         if app.mode == Mode::Map {
             toolbar_sep(ui);
             if icon_button(ui, icons::MAGNIFYING_GLASS_MINUS, tr(lang, Key::ZoomOut), true).clicked() {
@@ -762,6 +780,10 @@ pub fn status(app: &mut EasyShowApp, ui: &mut egui::Ui) {
                 ui.weak(format!("z {:.1}", app.map.zoom));
             } else {
                 ui.weak(tr(lang, Key::GridHint));
+            }
+            #[cfg(feature = "formats")]
+            if app.anim_active() {
+                ui.weak(format!("● {}", tr(lang, Key::Animated)));
             }
             if app.is_slideshow() {
                 ui.weak(format!("▶ {}", tr(lang, Key::Slideshow)));

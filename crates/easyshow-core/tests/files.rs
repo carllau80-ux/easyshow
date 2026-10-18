@@ -97,3 +97,52 @@ fn reads_exif_summary_from_heic() {
     assert!((lat - 31.230416).abs() < 1e-4, "lat={lat}");
     assert!((lon - 121.473701).abs() < 1e-4, "lon={lon}");
 }
+
+#[cfg(feature = "formats")]
+#[test]
+fn decodes_extended_format_samples() {
+    for name in [
+        "extended/sample.svg",
+        "extended/sample.psd",
+        "extended/sample.hdr",
+        "extended/sample.exr",
+        "extended/splines.jxl",
+        "extended/pq-gradient.jxl",
+    ] {
+        let path = testdata(name);
+        if !path.exists() {
+            eprintln!("skip: {} missing", path.display());
+            continue;
+        }
+        let img = easyshow_core::decode_file(&path)
+            .unwrap_or_else(|e| panic!("{name} decode failed: {e}"));
+        assert!(img.width > 0 && img.height > 0, "{name}: empty");
+        assert_eq!(
+            img.rgba.len(),
+            img.width as usize * img.height as usize * 4,
+            "{name}: buffer size mismatch"
+        );
+        eprintln!("{name}: {}x{}", img.width, img.height);
+    }
+}
+
+#[cfg(feature = "formats")]
+#[test]
+fn reads_extended_dimensions() {
+    for (name, expected) in [
+        ("extended/sample.svg", (640, 400)),
+        ("extended/sample.psd", (360, 240)),
+        ("extended/sample.hdr", (360, 240)),
+        ("extended/sample.exr", (360, 240)),
+    ] {
+        let path = testdata(name);
+        if !path.exists() {
+            continue;
+        }
+        assert_eq!(
+            easyshow_core::image_dimensions(&path).unwrap(),
+            expected,
+            "{name}"
+        );
+    }
+}

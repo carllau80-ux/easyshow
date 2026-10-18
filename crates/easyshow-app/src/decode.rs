@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use easyshow_core::{decode_file, ImageBuf};
+use easyshow_core::{decode_file_scaled, ImageBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Purpose {
@@ -113,7 +113,8 @@ impl DecodeService {
 }
 
 fn decode_one(req: &DecodeRequest) -> easyshow_core::Result<(ImageBuf, bool)> {
-    let mut image = decode_file(&req.path)?;
+    // 把目标尺寸传给 core:SVG 等矢量格式会直接按显示尺寸渲染。
+    let mut image = decode_file_scaled(&req.path, req.max_dim)?;
     if let Some(orientation) = easyshow_core::exif::orientation_from_file(&req.path) {
         image = easyshow_core::exif::apply_orientation(image, orientation);
     }

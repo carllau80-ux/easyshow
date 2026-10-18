@@ -3,12 +3,13 @@
 # 默认产出两个变体:
 #   完整版 EasyShow.app / EasyShow-<ver>-<arch>.dmg      (含 HEIC/AVIF;默认打入 libheif,可用 EASYSHOW_BUNDLE_LIBHEIF=0 关闭)
 #   轻量版 EasyShow Lite.app / EasyShow-Lite-<ver>-<arch>.dmg (不含 HEIC/AVIF,零附加依赖)
-# 用法:packaging/macos/make-bundle.sh [universal|aarch64-apple-darwin|x86_64-apple-darwin] [full|lite|both]
+# 用法:packaging/macos/make-bundle.sh [universal|aarch64-apple-darwin|x86_64-apple-darwin]
+# 轻量版(lite)自 0.2.3 起冻结,不再随新版打包。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
 VERSION="$(awk -F'"' '/^\[workspace.package\]/{f=1} f&&/^version/{print $2; exit}' Cargo.toml)"
 ARCH="${1:-universal}"
-WHICH="${2:-both}"
+WHICH="${2:-full}"
 
 build_bin() { # $1 = full|lite → 输出二进制路径
     local variant="$1"
@@ -132,9 +133,7 @@ EOF
 
 case "$WHICH" in
     full) bundle full ;;
-    lite) bundle lite ;;
-    both) bundle full; bundle lite ;;
-    *) echo "未知变体: $WHICH(可用 full|lite|both)" >&2; exit 2 ;;
+    *) echo "轻量版自 0.2.3 起冻结;用法:make-bundle.sh [arch] [full]" >&2; exit 2 ;;
 esac
 
 echo ">> 产物:"

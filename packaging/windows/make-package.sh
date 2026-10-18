@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# 组装 Windows 分发产物(两个变体)→ dist/windows/
+# 组装 Windows 分发产物(完整版)→ dist/windows/
 #   easyshow-<ver>-windows-x86_64-full.zip  便携·完整版(exe + HEIC/AVIF 运行时 DLL)
-#   easyshow-<ver>-windows-x86_64-lite.zip  便携·轻量版(exe,无 DLL,不含 HEIC/AVIF)
 #   EasyShow-<ver>-Full-Setup.exe           NSIS 安装包·完整版
-#   EasyShow-<ver>-Lite-Setup.exe           NSIS 安装包·轻量版(与完整版可共存)
 #
-# 两个 exe 由本脚本自行编译(full 用默认特性;lite 用 --no-default-features)。
+# 轻量版(lite)自 0.2.3 起冻结,不再随新版发布。
 # 交叉编译时请先设好工具链环境:
 #   export PATH="$HOME/.local/mingw64/root/usr/bin:$PATH"
 #   export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="$PWD/packaging/windows/mingw-linker.sh"
@@ -13,10 +11,10 @@
 #
 # 环境变量:
 #   TARGET     目标三元组(默认宿主;交叉编译设 x86_64-pc-windows-gnu)
-#   LIBS_DIR   libheif DLL 闭包(默认 /tmp/msys2/pruned;缺失则完整版不含 DLL,给出警告)
+#   LIBS_DIR   libheif DLL 闭包(默认 /tmp/msys2/pruned;缺失则不含 DLL,给出警告)
 #   NSIS_ROOT  NSIS 解包位置(默认 $HOME/.local/nsis/root;缺失只产 zip)
 #   MAKENSIS   直接指定 makensis 可执行文件(如 Windows CI)
-#   EXE_FULL / EXE_LITE  跳过编译,直接使用已有 exe
+#   EXE_FULL   跳过编译,直接使用已有 exe
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
 VERSION="$(awk -F'"' '/^\[workspace.package\]/{f=1} f&&/^version/{print $2; exit}' Cargo.toml)"
@@ -42,63 +40,41 @@ fi
 
 DIST="dist/windows"; mkdir -p "$DIST"
 STAGE_FULL="build/win/EasyShow-$VERSION-windows-x86_64-full"
-STAGE_LITE="build/win/EasyShow-$VERSION-windows-x86_64-lite"
-rm -rf "$STAGE_FULL" "$STAGE_LITE"; mkdir -p "$STAGE_FULL" "$STAGE_LITE"
+rm -rf "$STAGE_FULL"; mkdir -p "$STAGE_FULL"
 
-# 注意:两次编译共用同一个输出路径,必须"编译完立即复制",否则会被下一变体覆盖
 if [ -n "${EXE_FULL:-}" ]; then
-    echo ">> 使用已有完整版 exe: $EXE_FULL"
+    echo ">> 使用已有 exe: $EXE_FULL"
 else
-    echo ">> 编译完整版(full, 含 HEIC/AVIF)…"
+    echo ">> 编译完整版(full, 含 HEIC/AVIF、扩展格式与动图)…"
     cargo build --release -j4 -p easyshow-app "${CARGO_TARGET_ARG[@]}" 2>&1 | tail -2
     EXE_FULL="$EXE_DIR/easyshow.exe"
 fi
 [ -f "$EXE_FULL" ] || { echo "!! 缺少 $EXE_FULL"; exit 1; }
 install -m755 "$EXE_FULL" "$STAGE_FULL/easyshow.exe"
 
-if [ -n "${EXE_LITE:-}" ]; then
-    echo ">> 使用已有轻量版 exe: $EXE_LITE"
-else
-    echo ">> 编译轻量版(lite, --no-default-features)…"
-    cargo build --release -j4 -p easyshow-app --no-default-features "${CARGO_TARGET_ARG[@]}" 2>&1 | tail -2
-    EXE_LITE="$EXE_DIR/easyshow.exe"
-fi
-[ -f "$EXE_LITE" ] || { echo "!! 缺少 $EXE_LITE"; exit 1; }
-install -m755 "$EXE_LITE" "$STAGE_LITE/easyshow-lite.exe"
-
-# ---- 完整版:附带 HEIC/AVIF 运行时 DLL ----
+# ---- 附带 HEIC/AVIF 运行时 DLL ----
 if [ -d "$LIBS_DIR" ] && ls "$LIBS_DIR"/*.dll >/dev/null 2>&1; then
-    echo ">> 完整版:附带 HEIC 运行时 DLL($LIBS_DIR)"
+    echo ">> 附带 HEIC 运行时 DLL($LIBS_DIR)"
     cp "$LIBS_DIR"/*.dll "$STAGE_FULL/" 2>/dev/null || true
     if [ -d /tmp/msys2/out/mingw64/share/licenses ]; then
         cp -r /tmp/msys2/out/mingw64/share/licenses "$STAGE_FULL/licenses"
     fi
 else
-    echo "!! 警告:未找到 DLL 闭包($LIBS_DIR),完整版将不含 HEIC 运行时 DLL"
+    echo "!! 警告:未找到 DLL 闭包($LIBS_DIR),将不含 HEIC 运行时 DLL"
 fi
 
-for stage in "$STAGE_FULL" "$STAGE_LITE"; do
-    cp README.md "$stage/README.md" 2>/dev/null || true
-    for f in LICENSE-MIT LICENSE-APACHE; do [ -f "$f" ] && cp "$f" "$stage/"; done
-done
+cp README.md "$STAGE_FULL/README.md" 2>/dev/null || true
+for f in LICENSE-MIT LICENSE-APACHE; do [ -f "$f" ] && cp "$f" "$STAGE_FULL/"; done
 
 cat > "$STAGE_FULL/使用说明.txt" <<'EOF'
 EasyShow 完整版 使用说明
 ========================
 1. 双击 easyshow.exe 运行;可直接打开图片,或把图片/文件夹拖进窗口
-2. 支持 JPEG/PNG/GIF/WebP/BMP/TIFF/ICO/QOI/TGA/PNM 与 HEIC/AVIF
+2. 支持 JPEG/PNG/GIF(动图)/WebP(动图)/BMP/TIFF/ICO/QOI/TGA/PNM,
+   以及 HEIC/AVIF、JPEG XL、SVG、PSD、HDR、EXR
 3. 本版已附带 HEIC/AVIF 解码库(libheif 相关 DLL),iPhone 的 HEIC 照片开箱即用;
    同目录下的 DLL 请勿删除或移动
 4. 如需开始菜单/桌面快捷方式/卸载入口,请使用 EasyShow-*-Full-Setup.exe 安装包
-EOF
-
-cat > "$STAGE_LITE/使用说明.txt" <<'EOF'
-EasyShow 轻量版 使用说明
-========================
-1. 双击 easyshow-lite.exe 运行;可直接打开图片,或把图片/文件夹拖进窗口
-2. 支持 JPEG/PNG/GIF/WebP/BMP/TIFF/ICO/QOI/TGA/PNM,零外部依赖,免安装
-3. 轻量版不含 HEIC/AVIF 支持(不附带任何 DLL);需要看 HEIC/AVIF 请使用完整版
-4. 如需开始菜单/桌面快捷方式/卸载入口,请使用 EasyShow-*-Lite-Setup.exe 安装包
 EOF
 
 echo ">> 打包 zip…"
@@ -135,7 +111,6 @@ PY
 }
 
 make_zip "dist/windows/easyshow-$VERSION-windows-x86_64-full.zip" "$STAGE_FULL"
-make_zip "dist/windows/easyshow-$VERSION-windows-x86_64-lite.zip" "$STAGE_LITE"
 
 if [ -n "$MAKENSIS" ]; then
     # makensis 是原生 Windows 程序:Git Bash 的 /d/... 路径它无法打开。而且 NSIS 的
@@ -151,22 +126,18 @@ if [ -n "$MAKENSIS" ]; then
             *) if command -v cygpath >/dev/null 2>&1; then printf '%s\\' "$p"; else printf '%s/' "$p"; fi ;;
         esac
     }
-    echo ">> 载荷检查: full=$(ls "$STAGE_FULL" | wc -l) 个文件, exe=$([ -f "$STAGE_FULL/easyshow.exe" ] && echo 有 || echo 无); lite=$(ls "$STAGE_LITE" | wc -l) 个文件, exe=$([ -f "$STAGE_LITE/easyshow-lite.exe" ] && echo 有 || echo 无)"
-    for variant in full lite; do
-        case "$variant" in
-            full) SRC="$ROOT/$STAGE_FULL"; OUT="$ROOT/$DIST/EasyShow-$VERSION-Full-Setup.exe" ;;
-            lite) SRC="$ROOT/$STAGE_LITE"; OUT="$ROOT/$DIST/EasyShow-$VERSION-Lite-Setup.exe" ;;
-        esac
-        echo ">> 生成 NSIS 安装包($variant)…"
-        "$MAKENSIS" -V2 -INPUTCHARSET UTF8 \
-            -DVERSION="$VERSION" \
-            -DVARIANT="$variant" \
-            -DSRC="$(native_dir "$SRC")" \
-            -DLICENSES="$(native_dir "$SRC/licenses")" \
-            -DOUT="$(native_path "$OUT")" \
-            -DICON="$(native_path "$ROOT/assets/icon.ico")" \
-            "$(native_path "$ROOT/packaging/windows/easyshow.nsi")" | tail -3
-    done
+    echo ">> 载荷检查: full=$(ls "$STAGE_FULL" | wc -l) 个文件, exe=$([ -f "$STAGE_FULL/easyshow.exe" ] && echo 有 || echo 无)"
+    SRC="$ROOT/$STAGE_FULL"
+    OUT="$ROOT/$DIST/EasyShow-$VERSION-Full-Setup.exe"
+    echo ">> 生成 NSIS 安装包(full)…"
+    "$MAKENSIS" -V2 -INPUTCHARSET UTF8 \
+        -DVERSION="$VERSION" \
+        -DVARIANT=full \
+        -DSRC="$(native_dir "$SRC")" \
+        -DLICENSES="$(native_dir "$SRC/licenses")" \
+        -DOUT="$(native_path "$OUT")" \
+        -DICON="$(native_path "$ROOT/assets/icon.ico")" \
+        "$(native_path "$ROOT/packaging/windows/easyshow.nsi")" | tail -3
 else
     echo "!! 未找到 makensis,跳过安装包(可用便携 zip)"
 fi

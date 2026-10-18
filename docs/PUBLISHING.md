@@ -24,12 +24,12 @@ GitHub 的仓库创建必须在网页完成(SSH 只能推送,不能建仓):
 2. `packaging/bump-version.sh`(不带参数=递增第三位 patch;重大改动用 minor / major)(版本号唯一来源:`Cargo.toml` 的 `[workspace.package]`,会进入安装包文件名、`--version`、设置菜单显示)
 3. `git add -A && git commit -m "…" && git tag v<新版本>`
 4. `git push && git push --tags`
-5. 两种出包方式任选(每个平台均产出 **完整版 full + 轻量版 lite** 两个变体):
+5. 两种出包方式任选(只发布**完整版**;轻量版 lite 自 0.2.3 起冻结):
    - **本机离线打包**(不依赖网络/CI):
-     - Linux:`packaging/build-linux.sh` → `dist/linux/`(full/lite 两个 deb + 两个 tar.gz)
-     - Windows:`packaging/windows/make-package.sh` → `dist/windows/`(Setup.exe × 2 + 便携 zip × 2;
-       交叉编译时先设好 mingw 工具链环境,完整版自动附带 `LIBS_DIR` 中的 libheif DLL 闭包)
-     - macOS:`packaging/macos/make-bundle.sh universal both`(需在 macOS 上跑)→ `dist/macos/`(.app + .dmg × 2)
+     - Linux:`packaging/build-linux.sh` → `dist/linux/`(deb + tar.gz)
+     - Windows:`packaging/windows/make-package.sh` → `dist/windows/`(Setup.exe + 便携 zip;
+       交叉编译时先设好 mingw 工具链环境,自动附带 `LIBS_DIR` 中的 libheif DLL 闭包)
+     - macOS:`packaging/macos/make-bundle.sh universal`(需在 macOS 上跑)→ `dist/macos/`(.app + .dmg)
    - **GitHub Actions**:`.github/workflows/release.yml` 监听 `v*` 标签,自动构建三平台产物(Artifacts);
      也可把本机 `dist/` 中的安装包直接拖到 GitHub Release 页面上传。
 

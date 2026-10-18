@@ -13,12 +13,19 @@ kamadak-exif = { workspace = true }
 libloading = { workspace = true, optional = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+# 扩展格式(full 版):JPEG XL / SVG / PSD
+jxl-oxide = { workspace = true, optional = true }
+resvg = { workspace = true, optional = true }
+psd = { workspace = true, optional = true }
+fontdb = { workspace = true, optional = true }
 
 [features]
-default = ["heic"]
+default = ["heic", "formats"]
 # HEIC/AVIF 解码:运行时 dlopen libheif(经 libloading 直连,无编译期 C 依赖)。
 # 关闭后编译产物不含任何 HEIF 相关代码——HEIC/AVIF 文件不再被识别(轻量版)。
 heic = ["dep:libloading"]
+# 扩展格式:JPEG XL、SVG、PSD(纯 Rust 解码器)。HDR/EXR 走 image crate 特性。
+formats = ["dep:jxl-oxide", "dep:resvg", "dep:psd", "dep:fontdb"]
 
 [[example]]
 name = "heif_exif_probe"

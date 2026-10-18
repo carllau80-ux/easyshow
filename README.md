@@ -1,19 +1,17 @@
 # EasyShow
 
-轻量级跨平台图片查看器(Rust),已到 **M3 打磨**阶段:浏览、EXIF、主题双语、批量删除、幻灯片均已可用。
+轻量级跨平台图片查看器(Rust),已到 **M3+** 阶段:浏览、EXIF/位置、地图、动图、扩展格式均已可用。
 
-- 定位:秒开、顺滑、够用 —— 冷启动 < 500 ms,内置 12+ 主流图片格式(含 HEIC 与实况照片静帧),中英双语、主题色可换
-- **两个编译变体**:`完整版`(含 HEIC/AVIF 运行时解码)与 `轻量版 lite`(不含 HEIC/AVIF 相关代码,零外部依赖)
+- 定位:秒开、顺滑、够用 —— 冷启动 < 500 ms,内置 18+ 主流图片格式(含 HEIC/AVIF、JPEG XL、SVG、PSD、HDR/EXR 与 GIF/WebP 动图),中英双语、主题色可换
+- **发布形态**:自 0.2.4 起只发布**完整版**(含 HEIC/AVIF、扩展格式与动图);**轻量版 lite 自 0.2.3 起冻结**,不再随新版更新
 - 平台:Linux(X11 / Wayland)· Windows · macOS
-- 技术栈:eframe(egui)+ wgpu;zune-jpeg / image / fast_image_resize 解码管线;HEIC/AVIF 经运行时加载的 libheif(编译期零 C 依赖)
+- 技术栈:eframe(egui)+ wgpu;zune-jpeg / image / fast_image_resize 解码管线;HEIC/AVIF 经运行时加载的 libheif(编译期零 C 依赖);JPEG XL/SVG/PSD 使用纯 Rust 解码器
 
 ## 快速开始
 
 ```bash
-cargo run -p easyshow-app -- <图片文件或文件夹>   # 打开图片 / 浏览目录(完整版)
-cargo run -p easyshow-app --no-default-features -- <路径>  # 轻量版(无 HEIC/AVIF)
-cargo test -p easyshow-core                        # 解码 / EXIF / 缩放 / HEIC 单测
-cargo test -p easyshow-core --no-default-features  # 轻量版单测(HEIC 用例自动剔除)
+cargo run -p easyshow-app -- <图片文件或文件夹>   # 打开图片 / 浏览目录
+cargo test -p easyshow-core                        # 解码 / EXIF / 缩放 / 扩展格式单测
 ```
 
 键位:← → 翻页 · + / − 缩放 · 0 适应窗口 · 1 实际大小 · R 旋转 · F 镜像 · F11 全屏 · Esc 退出全屏 ·
@@ -23,8 +21,8 @@ cargo test -p easyshow-core --no-default-features  # 轻量版单测(HEIC 用例
 
 ## 版本与发布
 
-- 版本号唯一来源:`Cargo.toml` 的 `[workspace.package]`(当前 **0.2.3**),每次更新用 `packaging/bump-version.sh` 递增第三位(默认 patch)
-- 发布流程与 GitHub 上传步骤见 [docs/PUBLISHING.md](docs/PUBLISHING.md);打 `v*` 标签会触发三平台 CI 出包(每平台均含 full/lite 两个变体)
+- 版本号唯一来源:`Cargo.toml` 的 `[workspace.package]`(当前 **0.2.4**),每次更新用 `packaging/bump-version.sh` 递增第三位(默认 patch)
+- 发布流程与 GitHub 上传步骤见 [docs/PUBLISHING.md](docs/PUBLISHING.md);打 `v*` 标签会触发三平台 CI 出包(完整版)
 
 ## 文档
 
@@ -54,17 +52,16 @@ packaging/install-local.sh --uninstall     # 卸载以上全部内容(--lite --u
 
 | 平台 | 产物 | 构建方式 |
 |---|---|---|
-| Linux | `easyshow_<ver>_amd64.deb` / `easyshow-lite_<ver>_amd64.deb`;`easyshow-<ver>-linux-x86_64-{full,lite}.tar.gz`(便携) | `packaging/build-linux.sh` → `dist/linux/` |
-| Windows | `EasyShow-<ver>-{Full,Lite}-Setup.exe`(NSIS 安装包);`easyshow-<ver>-windows-x86_64-{full,lite}.zip`(便携) | `packaging/windows/make-package.sh`(自动编译两个 exe;可在 Linux 上交叉编译) |
-| macOS | `EasyShow-<ver>-{full,lite}.dmg`(Intel + Apple Silicon 通用) | `packaging/macos/make-bundle.sh`(需 macOS 或 CI) |
-| 三平台 | 同上 + 两个 AppImage | `.github/workflows/release.yml`(推送 `v*` 标签或手动触发) |
+| Linux | `easyshow_<ver>_amd64.deb`;`easyshow-<ver>-linux-x86_64-full.tar.gz`(便携) | `packaging/build-linux.sh` → `dist/linux/` |
+| Windows | `EasyShow-<ver>-Full-Setup.exe`(NSIS 安装包);`easyshow-<ver>-windows-x86_64-full.zip`(便携) | `packaging/windows/make-package.sh`(可在 Linux 上交叉编译) |
+| macOS | `EasyShow-<ver>-universal.dmg`(Intel + Apple Silicon 通用) | `packaging/macos/make-bundle.sh`(需 macOS 或 CI) |
+| 三平台 | 同上 + AppImage | `.github/workflows/release.yml`(推送 `v*` 标签或手动触发) |
 
 Windows 安装包特性:用户级安装(无需管理员)、开始菜单/桌面快捷方式、加入常见图片格式"打开方式"、控制面板卸载项,含中文界面;完整版与轻量版使用**不同的安装目录与注册表键,可同时安装**。
 
 > **变体说明**
-> - **完整版 full**:编译含 HEIC/AVIF 解码(运行时 dlopen libheif,编译期零 C 依赖)。Windows 完整版随包附带 libheif DLL 闭包(Setup ≈ 18.5 MB / zip ≈ 26 MB),HEIC 开箱即用;Linux 完整版经系统 `libheif1`(deb 中 Recommends);macOS 完整版默认把 libheif 打入 App 内。
-> - **轻量版 lite**:以 `--no-default-features` 编译,产物**不含任何 HEIF 相关代码**——HEIC/AVIF 文件不再被识别与列出,其余格式与功能完全一致,零外部依赖(Windows Setup ≈ 4.9 MB)。
-> - 命令行构建:完整版 `cargo build --release -p easyshow-app`;轻量版加 `--no-default-features`。变体由 `heic` feature 决定——lite 版的窗口标题与设置菜单标注为 **EasyShow Lite**,Windows exe 产品名同样区分。
+> - **完整版**:含 HEIC/AVIF(运行时 dlopen libheif,编译期零 C 依赖)、JPEG XL/SVG/PSD/HDR/EXR 与 GIF/WebP 动图。Windows 随包附带 libheif DLL 闭包;Linux 经系统 `libheif1`(deb 中 Recommends);macOS 默认把 libheif 打入 App 内。
+> - **轻量版 lite(冻结)**:自 0.2.3 起不再更新,也不随新版发布;需要旧 lite 包可从 v0.2.3 的 Release 下载。
 
 ## 功能(当前版本)
 
@@ -75,9 +72,10 @@ Windows 安装包特性:用户级安装(无需管理员)、开始菜单/桌面�
 - **批量删除(默认只读)**:缺省不开启删除;设置中勾选「允许删除」后,网格里 Ctrl/Shift 多选、Delete 键或垃圾桶按钮 → **二次确认弹窗** → 移入系统回收站(三平台,可恢复)
 - **信息面板**(右侧):文件尺寸、大小、格式、修改时间 + **完整 EXIF**(相机、镜头、光圈、快门、ISO、焦距、拍摄时间、**GPS 坐标**;HEIC/AVIF 亦可读)
 - **照片位置**:信息面板把 GPS 显示为「国家-省-市-区县-乡镇」——高德为主(设置里填免费 Web 服务 Key)、OSM Nominatim 兜底(免 Key);结果按位置缓存,重复查看不联网;无网或关闭联网时回退显示坐标
-- **地图模式**:工具栏地图按钮(或 **M** 键)把当前目录带 GPS 的照片聚合显示在图上(数量徽标;点击聚合放大,悬停看文件名,单击选中、双击进入浏览);内置**离线世界轮廓图**,开启联网后叠加高德/OSM 在线瓦片(按视口下载并缓存,自动处理高德 GCJ-02 坐标偏移)
+- **地图模式**:工具栏地图按钮(或 **M** 键)把当前目录带 GPS 的照片聚合显示在图上——**聚合点直接显示照片微缩图**(随缩放展示 1/4/9 张,超出显示 +N),**单击聚合弹出照片网格**(点缩略图选中、双击进入浏览),单击单张、双击查看;内置**离线世界轮廓图**,开启联网后叠加高德/OSM 在线瓦片(按视口下载并缓存,自动处理高德 GCJ-02 坐标偏移)
 - **联网默认关闭**:设置中开启「联网功能」后才会请求地名/瓦片;可填高德 Key、选择底图来源(自动 / 高德 / OpenStreetMap)
-- **格式**:JPEG / PNG / GIF / WebP / BMP / TIFF / ICO / TGA / PNM / QOI;HEIC / AVIF(仅完整版,运行时自动探测 libheif;轻量版不识别 HEIC/AVIF)
+- **格式**:JPEG / PNG / GIF / WebP(含动图)/ BMP / TIFF / ICO / TGA / PNM / QOI;**HEIC / AVIF**(运行时 libheif)、**JPEG XL**(jxl-oxide)、**SVG**(resvg 按需栅格化)、**PSD**(合成图)、**HDR / EXR**(色调映射)
+- **动图**:GIF / WebP 完整播放(后台流式解码,内存有界),工具栏播放/暂停、显示总帧数
 - **速度**:缩略图磁盘缓存(二次打开秒出)、相邻图预取(翻页零等待)、按显示尺寸解码、头部读尺寸不整图解码;**视口优先**——上万文件的大目录只解析"滚动到哪里就显示哪里"的可见区域(±2 行预读),拖动不卡
 - **排序**:名称(自然序,IMG_2 在 IMG_10 前)/ 修改时间 / 创建时间 / 大小 / 类型,升降序一键切换
 - **鼠标**:滚轮按"格"缩放(每格 1.15×,光标为锚,平台一致手感)、触控板捏合缩放、左/中键拖动平移、双击适应↔1:1;可在设置中把滚轮改为"翻页"
@@ -88,6 +86,12 @@ Windows 安装包特性:用户级安装(无需管理员)、开始菜单/桌面�
 
 ![目录树 + 缩略图网格](docs/screenshots/m2-grid-tree.png)
 ![浏览模式 + EXIF 信息](docs/screenshots/m2-viewer-exif.png)
+![扩展格式缩略图(SVG/PSD/HDR/EXR/JXL/动图)](docs/screenshots/m7-formats-grid.png)
+![SVG 矢量渲染](docs/screenshots/m7-svg.png)
+![PSD 合成图](docs/screenshots/m7-psd.png)
+![GIF 动图播放(3 帧)](docs/screenshots/m7-anim-gif.png)
+![地图聚合缩略图](docs/screenshots/m7-map-thumbnails.png)
+![地图聚合弹层照片网格](docs/screenshots/m7-map-popup.png)
 ![地图模式 · 离线世界图 + 照片聚合](docs/screenshots/m6-map-offline.png)
 ![地图模式 · 在线瓦片(高德)+ 标记对齐](docs/screenshots/m6-map-online.png)
 ![照片位置:国家-省-市-区县-乡镇](docs/screenshots/m6-map-location.png)
@@ -108,8 +112,9 @@ Windows 安装包特性:用户级安装(无需管理员)、开始菜单/桌面�
 - [x] M1 骨架:窗口、打开与显示、缩放平移、HEIC 运行时解码
 - [x] M2 浏览:目录树、缩略图网格 + 磁盘缓存、视口优先解析、相邻预取、排序
 - [x] M3 打磨(部分):深浅主题(随系统)、中英双语、EXIF 信息面板、全屏、批量删除(回收站)、幻灯片
-- [x] M3+ 位置与地图:逆地理编码(高德/OSM,可配 Key、结果缓存)、地图模式(离线世界图 + 在线瓦片、GPS 聚合/标记交互)
-- [ ] M3 余项:动图播放、配置持久化(目前仅联网设置落盘)、单实例
+- [x] M3+ 位置与地图:逆地理编码(高德/OSM,可配 Key、结果缓存)、地图模式(离线世界图 + 在线瓦片、聚合缩略图/弹层)
+- [x] M3+ 扩展格式与动图:HDR/EXR、JPEG XL、SVG、PSD、GIF/WebP 动图播放
+- [ ] M3 余项:配置持久化(目前仅联网设置落盘)、单实例
 - [ ] M4 发布:三平台打包与文件关联
 
 License(计划):MIT OR Apache-2.0

@@ -10,9 +10,11 @@ name = "easyshow"
 path = "src/main.rs"
 
 [features]
-default = ["heic"]
+default = ["heic", "formats"]
 # HEIC/AVIF 支持(默认开;轻量版用 --no-default-features 编译移除)。
 heic = ["easyshow-core/heic"]
+# 扩展格式与动图(JPEG XL / SVG / PSD / HDR / EXR / GIF & WebP 动画)。
+formats = ["easyshow-core/formats", "dep:image-webp"]
 
 [dependencies]
 easyshow-core = { path = "../easyshow-core", default-features = false }
@@ -30,6 +32,7 @@ image = { workspace = true }
 # 联网:地名逆编码(高德/OSM)+ 在线瓦片
 ureq = { workspace = true }
 serde_json = { workspace = true }
+image-webp = { workspace = true, optional = true }
 
 [build-dependencies]
 # 无条件引入:交叉编译时 [target.'cfg(windows)'] 的 build-dependencies 不会激活;

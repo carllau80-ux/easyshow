@@ -138,6 +138,8 @@ easyshow/
 | 目录监控(P1) | notify | 跨平台文件系统事件 |
 | 回收站(P1) | trash | 三平台删除到回收站 |
 | 联网(地名/在线瓦片) | ureq 3 + rustls(ring)+ webpki-roots | 阻塞式 HTTP 跑在既有工作线程里,不引入异步运行时;纯 Rust、无外部 DLL;联网默认关闭,坐标按位置缓存 |
+| 扩展格式 | jxl-oxide(JPEG XL)、resvg/usvg(SVG)、psd 0.3(PSD)、image 的 hdr/exr 特性 | 全部纯 Rust,无外部 DLL;HDR/EXR/浮点 JXL 走统一色调映射;轻量版通过 `formats` feature 剔除 |
+| 动图 | image 的 GifDecoder + image-webp | 后台线程流式解码、有界通道传递帧,大动图内存可控;浏览模式播放/暂停 |
 | CLI / 配置 / 日志 | clap / serde + toml / tracing | |
 | 打包 | cargo-packager + GitHub Actions | AppImage/deb/rpm、msi/zip、dmg,三平台矩阵 |
 
@@ -196,7 +198,8 @@ easyshow-core 配 criterion 基准(decode / resize / thumbnail),防性能回归�
 | M1 骨架 | 窗口、打开文件 / 文件夹与拖拽、单图显示、缩放平移、核心快捷键 | ~1 周 | ✅ 已交付(含 HEIC 运行时解码) |
 | M2 浏览 | 目录索引、胶片条 / 网格、排序、缩略图缓存、渐进加载、EXIF 方向 | 1.5~2 周 | ✅ 主体已交付(目录树 + 缩略图网格/磁盘缓存 + 双模式 + EXIF 信息面板 + 预取);待补:排序选项、两级渐进解码 |
 | M3 打磨 | 动图、幻灯片、全屏、主题与双语、配置、单实例、信息面板 | ~1 周 | 幻灯片/全屏/主题双语/信息面板/批量删除已交付 |
-| M3+ 位置与地图 | 逆地理编码(高德/OSM)、地图模式(离线世界图 + 在线瓦片、GPS 聚合)、联网开关与缓存 | ~1 周 | ✅ 已交付(联网默认关闭;GCJ-02 对齐;瓦片/地名磁盘缓存) |
+| M3+ 位置与地图 | 逆地理编码(高德/OSM)、地图模式(离线世界图 + 在线瓦片、GPS 聚合)、联网开关与缓存 | ~1 周 | ✅ 已交付(联网默认关闭;GCJ-02 对齐;瓦片/地名磁盘缓存;聚合点缩略图 + 弹层) |
+| M3+ 扩展格式与动图 | HDR/EXR、JPEG XL、SVG、PSD、GIF/WebP 动图;地图聚合改为缩略图展示 | ~1 周 | ✅ 已交付(只随完整版发布;lite 自 0.2.3 冻结) |
 | M4 发布 | 三平台 CI、安装包、文件关联、README 与许可(MIT OR Apache-2.0) | ~1 周 | 本机已产出 deb/tar.gz/Windows zip+NSIS(交叉编译);macOS 走 CI(`.github/workflows/release.yml`) |
 | P1 / P2 | 轻编辑与文件操作 / 重格式与色彩管理 | 按需排期 | |
 

@@ -20,6 +20,17 @@ pub enum Format {
     /// AVIF 容器(需 `heic` feature)
     #[cfg(feature = "heic")]
     Avif,
+    // --- 扩展格式(需 `formats` feature) ---
+    #[cfg(feature = "formats")]
+    Hdr,
+    #[cfg(feature = "formats")]
+    Exr,
+    #[cfg(feature = "formats")]
+    Jxl,
+    #[cfg(feature = "formats")]
+    Psd,
+    #[cfg(feature = "formats")]
+    Svg,
 }
 
 impl Format {
@@ -39,6 +50,16 @@ impl Format {
             Format::Heif => "HEIC",
             #[cfg(feature = "heic")]
             Format::Avif => "AVIF",
+            #[cfg(feature = "formats")]
+            Format::Hdr => "HDR",
+            #[cfg(feature = "formats")]
+            Format::Exr => "EXR",
+            #[cfg(feature = "formats")]
+            Format::Jxl => "JPEG XL",
+            #[cfg(feature = "formats")]
+            Format::Psd => "PSD",
+            #[cfg(feature = "formats")]
+            Format::Svg => "SVG",
         }
     }
 }
@@ -84,7 +105,50 @@ pub fn probe(head: &[u8]) -> Option<Format> {
             _ => None,
         };
     }
+    #[cfg(feature = "formats")]
+    {
+        // Radiance HDR
+        if head.starts_with(b"#?RADIANCE") || head.starts_with(b"#?RGBE") {
+            return Some(Format::Hdr);
+        }
+        // OpenEXR
+        if head.starts_with(&[0x76, 0x2F, 0x31, 0x01]) {
+            return Some(Format::Exr);
+        }
+        // JPEG XL: 容器签名或裸码流
+        if (head.len() >= 12 && head.starts_with(&[0x00, 0x00, 0x00, 0x0C]) && &head[4..8] == b"JXL ")
+            || head.starts_with(&[0xFF, 0x0A])
+        {
+            return Some(Format::Jxl);
+        }
+        // Photoshop
+        if head.starts_with(b"8BPS") {
+            return Some(Format::Psd);
+        }
+        // SVG: XML 文档(在前 2 KiB 内出现 <svg)
+        if looks_like_svg(head) {
+            return Some(Format::Svg);
+        }
+    }
     None
+}
+
+/// 粗略判定:去掉 BOM/空白后以 `<` 开头,且前 2 KiB 内出现 `<svg`。
+#[cfg(feature = "formats")]
+fn looks_like_svg(head: &[u8]) -> bool {
+    let window = &head[..head.len().min(2048)];
+    let mut i = 0;
+    if window.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        i = 3;
+    }
+    while i < window.len() && window[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if window.get(i) != Some(&b'<') {
+        return false;
+    }
+    let lower: Vec<u8> = window.iter().map(|b| b.to_ascii_lowercase()).collect();
+    lower.windows(4).any(|w| w == b"<svg")
 }
 
 /// Detect the format from the file extension (used for formats without a
@@ -106,6 +170,16 @@ pub fn from_extension(path: &Path) -> Option<Format> {
         "heic" | "heif" | "hif" => Format::Heif,
         #[cfg(feature = "heic")]
         "avif" => Format::Avif,
+        #[cfg(feature = "formats")]
+        "hdr" => Format::Hdr,
+        #[cfg(feature = "formats")]
+        "exr" => Format::Exr,
+        #[cfg(feature = "formats")]
+        "jxl" => Format::Jxl,
+        #[cfg(feature = "formats")]
+        "psd" => Format::Psd,
+        #[cfg(feature = "formats")]
+        "svg" => Format::Svg,
         _ => return None,
     })
 }
@@ -144,5 +218,33 @@ mod tests {
             assert_eq!(from_extension(Path::new("photo.avif")), Some(Format::Avif));
         }
         assert_eq!(from_extension(Path::new("readme.txt")), None);
+    }
+
+    #[cfg(feature = "formats")]
+    #[test]
+    fn probes_extended_formats() {
+        assert_eq!(probe(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n"), Some(Format::Hdr));
+        assert_eq!(probe(&[0x76, 0x2F, 0x31, 0x01, 0x02]), Some(Format::Exr));
+        assert_eq!(
+            probe(&[0x00, 0x00, 0x00, 0x0C, b'J', b'X', b'L', b' ', 0x0D, 0x0A, 0x87, 0x0A]),
+            Some(Format::Jxl)
+        );
+        assert_eq!(probe(&[0xFF, 0x0A, 0x00, 0x00]), Some(Format::Jxl));
+        assert_eq!(probe(b"8BPS\x00\x01"), Some(Format::Psd));
+        assert_eq!(
+            probe(b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"),
+            Some(Format::Svg)
+        );
+        assert_eq!(probe(b"<html><body>no svg here</body></html>"), None);
+
+        for (ext, fmt) in [
+            ("a.hdr", Format::Hdr),
+            ("a.exr", Format::Exr),
+            ("a.jxl", Format::Jxl),
+            ("a.psd", Format::Psd),
+            ("a.svg", Format::Svg),
+        ] {
+            assert_eq!(from_extension(Path::new(ext)), Some(fmt), "{ext}");
+        }
     }
 }

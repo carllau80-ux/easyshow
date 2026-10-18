@@ -1,20 +1,14 @@
 #!/usr/bin/env bash
-# 产出 Linux 分发产物(完整版 + 轻量版)→ dist/linux/
+# 产出 Linux 分发产物(完整版)→ dist/linux/
 #   easyshow_<ver>_amd64.deb               完整版 .deb(含 HEIC/AVIF,运行时加载系统 libheif)
-#   easyshow-lite_<ver>_amd64.deb          轻量版 .deb(不含 HEIC/AVIF 相关代码)
 #   easyshow-<ver>-linux-x86_64-full.tar.gz 便携·完整版(解压后执行 packaging/install-local.sh)
-#   easyshow-<ver>-linux-x86_64-lite.tar.gz 便携·轻量版(同理,自动识别为 easyshow-lite)
 #
-# 两个变体可并存安装(easyshow / easyshow-lite 两个包、两个桌面条目)。
+# 轻量版(lite)自 0.2.3 起冻结,不再随新版发布。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 
 VERSION="$(awk -F'"' '/^\[workspace.package\]/{f=1} f&&/^version/{print $2; exit}' Cargo.toml)"
 DIST="dist/linux"; mkdir -p "$DIST" build/lin
-
-echo ">> 编译轻量版(lite, --no-default-features)…"
-cargo build --release -j4 -p easyshow-app --no-default-features 2>&1 | tail -1
-install -m755 target/release/easyshow build/lin/easyshow-lite
 
 echo ">> 编译完整版(full, 含 HEIC/AVIF)…"
 cargo build --release -j4 -p easyshow-app 2>&1 | tail -1
@@ -101,15 +95,10 @@ EOF
 }
 
 MIMES_FULL="image/jpeg;image/png;image/gif;image/webp;image/bmp;image/tiff;image/heic;image/heif;image/avif;image/qoi;image/x-tga;image/x-portable-pixmap;"
-MIMES_LITE="image/jpeg;image/png;image/gif;image/webp;image/bmp;image/tiff;image/qoi;image/x-tga;image/x-portable-pixmap;"
 
 make_deb easyshow build/lin/easyshow "EasyShow" "EasyShow 图片查看器" "$MIMES_FULL" "libheif1" \
     "Lightweight, fast image viewer (EasyShow)" \
     " 完整版:HEIC/AVIF 通过运行时加载 libheif 支持(建议安装 libheif1 以启用)。"
-
-make_deb easyshow-lite build/lin/easyshow-lite "EasyShow Lite" "EasyShow Lite 图片查看器" "$MIMES_LITE" "" \
-    "Lightweight, fast image viewer (EasyShow Lite)" \
-    " 轻量版:不含 HEIC/AVIF 相关代码,零外部依赖;需要 HEIC/AVIF 请安装 easyshow。"
 
 # ---------------- 便携 tar.gz ----------------
 # make_tar <tag> <二进制源> <包内二进制名>
@@ -128,7 +117,6 @@ make_tar() {
 }
 
 make_tar full build/lin/easyshow easyshow
-make_tar lite build/lin/easyshow-lite easyshow-lite
 
 echo ">> 产物:"
 ls -la "$DIST"
