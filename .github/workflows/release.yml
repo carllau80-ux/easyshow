@@ -1,8 +1,13 @@
 name: release
 
-# 三平台安装包构建(完整版),打 v* 标签时自动创建 GitHub Release 并附带产物。
-# 轻量版(lite)自 0.2.3 起冻结,不再随新版发布。
-# 需要能访问 GitHub 的环境;受限网络下的本机构建见 packaging/ 脚本。
+# Windows full build. On a v* tag this workflow creates a GitHub Release
+# with the portable zip and the NSIS installer.
+#
+# Linux/macOS jobs are intentionally disabled until the Windows build has
+# been validated. Restore them from git history when publishing other
+# platforms (see docs/PUBLISHING.md).
+#
+# Lite builds are frozen at 0.2.3 and are no longer published.
 on:
   workflow_dispatch:
   push:
@@ -12,35 +17,6 @@ permissions:
   contents: write # Release 创建/资产上传
 
 jobs:
-  linux:
-    name: Linux (.deb / tar.gz / AppImage)
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: deb + tarball
-        run: bash packaging/build-linux.sh
-      - name: AppImage
-        run: |
-          set -euo pipefail
-          VERSION="$(awk -F'"' '/^\[workspace.package\]/{f=1} f&&/^version/{print $2; exit}' Cargo.toml)"
-          curl -fsSL -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x appimagetool
-          mkdir -p dist/linux
-          APP=easyshow; BIN=build/lin/easyshow
-          APPDIR="build/appimage/EasyShow.AppDir"
-          rm -rf "$APPDIR"; mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-          install -m755 "$BIN" "$APPDIR/usr/bin/$APP"
-          sed "s#Exec=/usr/bin/$APP#Exec=$APP#" "build/deb/${APP}_${VERSION}_amd64/usr/share/applications/$APP.desktop" > "$APPDIR/$APP.desktop"
-          cp assets/icon-256.png "$APPDIR/$APP.png"
-          cp assets/icon-256.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP.png"
-          ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/linux/EasyShow-${VERSION}-x86_64.AppImage"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: easyshow-linux
-          path: dist/linux/*
-
   windows:
     name: Windows (zip / Setup.exe)
     runs-on: windows-latest
@@ -96,55 +72,40 @@ jobs:
           name: easyshow-windows
           path: dist/windows/*
 
-  macos:
-    name: macOS (.app / .dmg, universal)
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
-      - name: Bundle + dmg
-        run: |
-          set -o pipefail
-          if ! bash packaging/macos/make-bundle.sh universal both > build-bundle.log 2>&1; then
-            {
-              echo '### macOS packaging failed'
-              echo '```'
-              tail -n 150 build-bundle.log
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-            tail -n 8 build-bundle.log | while IFS= read -r line; do echo "::error::${line}"; done
-            exit 1
-          fi
-          tail -n 30 build-bundle.log
-      - uses: actions/upload-artifact@v4
-        with:
-          name: easyshow-macos
-          path: dist/macos/*
-
   release:
-    name: GitHub Release(附带全部二进制包)
-    needs: [linux, windows, macos]
+    name: GitHub Release (Windows full)
+    needs: [windows]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: ver
+        run: |
+          VERSION="$(awk -F'"' '/^\[workspace.package\]/{f=1} f&&/^version/{print $2; exit}' Cargo.toml)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
           path: dist
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/**/*.deb
-            dist/**/*.tar.gz
             dist/**/*.zip
-            dist/**/*.AppImage
             dist/**/*.exe
-            dist/**/*.dmg
-          generate_release_notes: true
           body: |
-            EasyShow — 轻量级跨平台图片查看器(完整版)
+            **EasyShow ${{ steps.ver.outputs.version }}** — a lightweight, fast desktop image viewer (Windows full build).
 
-            **支持格式**:JPEG / PNG / GIF(动图)/ WebP(动图)/ BMP / TIFF / ICO / TGA / PNM / QOI,
-            HEIC / AVIF(运行时 libheif;Windows 包内附带 DLL 闭包),JPEG XL / SVG / PSD / HDR / EXR
-            **功能**:目录树、缩略图网格(视口优先)、单图浏览、EXIF/GPS 信息面板、批量删除(回收站,默认只读)、幻灯片(整目录/所选批量)、深浅主题、中英双语
+            **Highlights**
+            - Folder tree, subfolder cards with covers, year/month/day timeline
+            - Fit-to-window by default, EXIF capture-time sorting, one-click copy of EXIF/location
+            - Map mode with photo-thumbnail clusters (up to 4 per cluster) and a full cluster gallery
+            - Offline world basemap plus China province boundaries and labels
+            - HEIC/AVIF, JPEG XL, SVG, PSD, HDR/EXR, animated GIF/WebP
+            - Remembers the last browsed folder (state.json)
+
+            **Assets**
+            - `easyshow-${{ steps.ver.outputs.version }}-windows-x86_64-full.zip` — portable (includes the libheif DLL closure)
+            - `EasyShow-${{ steps.ver.outputs.version }}-Full-Setup.exe` — per-user installer
+
+            > This release is Windows-only for now. Linux/macOS packages will follow after the Windows build has been validated.
+
+            Full feature list and documentation: https://github.com/carllau80-ux/easyshow#readme

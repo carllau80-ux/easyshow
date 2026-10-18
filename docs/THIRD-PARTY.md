@@ -1,25 +1,29 @@
-# 第三方组件与许可
+# Third-Party Components and Licenses
 
-EasyShow 本体采用 MIT OR Apache-2.0。以下为随二进制分发的主要第三方组件(均为纯 Rust 或仅按需运行时加载):
+**English** | [简体中文](zh-CN/THIRD-PARTY.md)
 
-| 组件 | 用途 | 许可 |
+EasyShow itself is licensed under MIT OR Apache-2.0. The main third-party components distributed with the binary are listed below (all are pure Rust or loaded at runtime only when needed):
+
+| Component | Purpose | License |
 |---|---|---|
-| image / zune-jpeg / fast_image_resize | 解码与缩放 | MIT / Apache-2.0 |
+| image / zune-jpeg / fast_image_resize | Decoding and resizing | MIT / Apache-2.0 |
 | eframe / egui | GUI | MIT / Apache-2.0 |
 | kamadak-exif | EXIF | BSD-2-Clause |
-| libloading + libheif(运行时加载) | HEIC/AVIF | libloading MIT;libheif LGPL-2.1(动态链接,独立组件) |
-| ureq / rustls / ring / webpki-roots | HTTPS(地名/瓦片) | MIT / Apache-2.0 / ISC |
+| libloading + libheif (runtime-loaded) | HEIC/AVIF | libloading MIT; libheif LGPL-2.1 (dynamic linking, separate component) |
+| ureq / rustls / ring / webpki-roots | HTTPS (place names/tiles) | MIT / Apache-2.0 / ISC |
 | serde_json | JSON | MIT / Apache-2.0 |
-| jxl-oxide | JPEG XL 解码 | Apache-2.0 |
-| resvg / usvg / tiny-skia / fontdb | SVG 渲染与字体 | MPL-2.0 / MIT / BSD-3-Clause |
-| psd | PSD 合成图 | MIT |
-| exr(image 的 exr 特性) | OpenEXR 解码 | BSD-3-Clause |
-| image-webp | 动画 WebP | MIT / Apache-2.0 |
-| gif(image 的 gif 特性) | 动画 GIF | MIT / Apache-2.0 |
-| Natural Earth / world-atlas | 离线世界地图 | Public Domain / ISC(见 assets/map/LICENSE-world-atlas.txt) |
-| DataV.GeoAtlas(阿里云)/ 高德地图 | 离线中国省界与九段线蒙版、省名标注 | 数据版权归原服务方,仅作低分辨率底图展示;地图界面标注来源 |
-| Phosphor Icons | 工具栏图标 | MIT(见 assets/fonts/LICENSE-Phosphor.txt) |
+| libc | Local time conversion | MIT / Apache-2.0 |
+| crossbeam-channel | Worker communication | MIT / Apache-2.0 |
+| jxl-oxide | JPEG XL decoding | Apache-2.0 |
+| resvg / usvg / tiny-skia / fontdb | SVG rendering and fonts | MPL-2.0 / MIT / BSD-3-Clause |
+| psd | PSD composite decoding | MIT |
+| exr (image feature) | OpenEXR decoding | BSD-3-Clause |
+| image-webp | Animated WebP | MIT / Apache-2.0 |
+| gif (image feature) | Animated GIF | MIT / Apache-2.0 |
+| Natural Earth / world-atlas | Offline world map | Public Domain / ISC (see assets/map/LICENSE-world-atlas.txt) |
+| DataV.GeoAtlas (Alibaba Cloud) / AMap | Offline China province boundaries, nine-dash line and labels | Data copyright belongs to the service providers; used only as a low-resolution basemap with attribution in the UI |
+| Phosphor Icons | Toolbar icons | MIT (see assets/fonts/LICENSE-Phosphor.txt) |
 
-- `resvg` 系列为 MPL-2.0:本项目以库的形式静态链接使用,**未修改其源码**;其源码可从 crates.io 获取。
-- `libheif` 仅在完整版中通过运行时 `dlopen` 使用(Windows 安装包随附 DLL,Linux 依赖系统 `libheif1`,macOS 打包内置),属于独立进程外组件。
-- 在线地图瓦片/地名服务:地图数据 © OpenStreetMap contributors(ODbL)或 © 高德地图,使用条款由对应服务方规定。
+- The `resvg` family is MPL-2.0. This project links it as a library and **does not modify its source**; the source is available from crates.io.
+- `libheif` is used only in the full build through runtime `dlopen` (DLLs bundled with the Windows installer, system `libheif1` on Linux, bundled inside the macOS app). It is a separate runtime component.
+- Online map tiles and geocoding: map data © OpenStreetMap contributors (ODbL) or © AMap; the terms of the respective service apply.

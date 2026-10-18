@@ -164,6 +164,8 @@ pub struct EasyShowApp {
     pub selected_folder: Option<usize>,
     /// 时间轴跳转:下一帧把网格滚动到该内容 Y 坐标。
     pub grid_scroll_to: Option<f32>,
+    /// 已写入 state.json 的目录,用于避免重复写盘。
+    last_saved_dir: Option<PathBuf>,
     pub(crate) tiles: TileService,
     pub tile_tex: HashMap<(TileKind, TileKey), egui::TextureHandle>,
     tile_order: VecDeque<(TileKind, TileKey)>,
@@ -334,6 +336,11 @@ impl EasyShowApp {
     pub fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>) -> Self {
         let lang = Lang::detect();
         let home = home_dir();
+        let last_dir = config::load_last_dir();
+        let startup_dir = last_dir
+            .clone()
+            .filter(|dir| dir.is_dir())
+            .unwrap_or_else(|| home.clone());
         let mut app = Self {
             lang,
             tree_root: build_tree_root(lang, &home),
@@ -407,6 +414,7 @@ impl EasyShowApp {
             folders_scanning: false,
             selected_folder: None,
             grid_scroll_to: None,
+            last_saved_dir: last_dir,
             tiles: TileService::new(),
             tile_tex: HashMap::new(),
             tile_order: VecDeque::new(),
@@ -427,8 +435,8 @@ impl EasyShowApp {
             Some(p) if p.is_file() => app.open_path(&cc.egui_ctx, p),
             Some(p) if p.is_dir() => app.open_path(&cc.egui_ctx, p),
             _ => {
-                app.tree_root.expand_to(&home);
-                app.open_dir(&cc.egui_ctx, home, None, Mode::Grid);
+                app.tree_root.expand_to(&startup_dir);
+                app.open_dir(&cc.egui_ctx, startup_dir, None, Mode::Grid);
             }
         }
         app
@@ -453,6 +461,10 @@ impl EasyShowApp {
 
     pub fn open_dir(&mut self, ctx: &egui::Context, dir: PathBuf, select: Option<PathBuf>, mode: Mode) {
         let dir = normalize_path(std::fs::canonicalize(&dir).unwrap_or(dir));
+        if self.last_saved_dir.as_deref() != Some(dir.as_path()) {
+            config::save_last_dir(&dir);
+            self.last_saved_dir = Some(dir.clone());
+        }
         self.current_dir = dir.clone();
         self.entries = scan_entries(&dir);
         sort_entries(&mut self.entries, self.sort_key, self.sort_asc);

@@ -1,10 +1,11 @@
-//! 最小化配置持久化:联网开关 / 高德 Key / 地图底图来源。
+//! 最小化配置持久化:联网开关 / 高德 Key / 地图底图来源,以及上次浏览目录。
 //!
 //! 存放于平台配置目录(而非缓存目录):
 //! - Windows: `%APPDATA%\EasyShow\config.json`
 //! - macOS:   `~/Library/Application Support/easyshow/config.json`
 //! - 其他:    `$XDG_CONFIG_HOME/easyshow/config.json` 或 `~/.config/easyshow/config.json`
 //!
+//! 上次浏览目录单独保存在同目录的 `state.json`(启动时自动回到该目录)。
 //! 其余界面设置(主题、语言、删除开关等)仍只存在于内存中,不在此文件。
 
 use std::path::PathBuf;
@@ -101,6 +102,52 @@ fn config_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("config.json"))
 }
 
+fn state_path() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("state.json"))
+}
+
+/// 上次浏览的目录(启动时恢复到该目录;文件不存在时返回 None)。
+pub fn load_last_dir() -> Option<PathBuf> {
+    let path = state_path()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let dir = v.get("last_dir")?.as_str()?;
+    if dir.trim().is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(dir))
+    }
+}
+
+/// 记录上次浏览的目录(原子写入,Unix 下 0600)。
+pub fn save_last_dir(dir: &std::path::Path) {
+    let Some(path) = state_path() else { return };
+    write_json(&path, &serde_json::json!({ "last_dir": dir.to_string_lossy() }));
+}
+
+fn write_json(path: &std::path::Path, body: &serde_json::Value) {
+    if let Some(dir) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            log::warn!("config: 无法创建目录 {}: {e}", dir.display());
+            return;
+        }
+    }
+    let tmp = path.with_extension("json.tmp");
+    let result = (|| -> std::io::Result<()> {
+        std::fs::write(&tmp, serde_json::to_vec_pretty(body).unwrap_or_default())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        }
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        log::warn!("config: 写入 {} 失败: {e}", path.display());
+    }
+}
+
 pub fn load() -> NetConfig {
     let Some(path) = config_path() else { return NetConfig::default() };
     let Ok(text) = std::fs::read_to_string(&path) else { return NetConfig::default() };
@@ -121,31 +168,14 @@ pub fn load() -> NetConfig {
 
 pub fn save(cfg: &NetConfig) {
     let Some(path) = config_path() else { return };
-    if let Some(dir) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(dir) {
-            log::warn!("config: 无法创建目录 {}: {e}", dir.display());
-            return;
-        }
-    }
-    let body = serde_json::json!({
-        "online": cfg.online,
-        "amap_key": cfg.amap_key,
-        "tile_source": cfg.tile_source.key(),
-    });
-    let tmp = path.with_extension("json.tmp");
-    let result = (|| -> std::io::Result<()> {
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&body).unwrap_or_default())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-        }
-        std::fs::rename(&tmp, &path)?;
-        Ok(())
-    })();
-    if let Err(e) = result {
-        log::warn!("config: 写入 {} 失败: {e}", path.display());
-    }
+    write_json(
+        &path,
+        &serde_json::json!({
+            "online": cfg.online,
+            "amap_key": cfg.amap_key,
+            "tile_source": cfg.tile_source.key(),
+        }),
+    );
 }
 
 #[cfg(test)]

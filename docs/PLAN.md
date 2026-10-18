@@ -1,226 +1,224 @@
-# EasyShow · 轻量级跨平台图片查看器 — 功能规划与技术方案
+# EasyShow · Lightweight Cross-Platform Image Viewer — Plan and Technical Design
 
-> **EasyShow** 为项目名称(早期工作名 Lumen、Liteshow,已更名)。
-> 一句话定位:用 Rust 写一个「秒开、顺滑、够用」的桌面看图工具,一套代码覆盖 Linux / Windows / macOS。
-> 对标参考:qimgv(极轻快)、ImageGlass(功能全)、nomacs —— 取三者交集里"快而美"的那部分。
-> 当前阶段:M1/M2 主体已交付(见 §4 里程碑状态);持续迭代中。
+**English** | [简体中文](zh-CN/PLAN.md)
 
----
-
-## 1. 目标与非目标
-
-**核心目标**
-
-- ⚡ 速度快:冷启动 < 500 ms;24MP JPEG 预览 < 80 ms、完全清晰 < 150 ms;缩放平移全程 ≥ 60 fps
-- 🪶 体量小:安装包 < 20 MB,空载内存 < 120 MB,无 Electron / WebView
-- 🖼 格式全:12+ 种主流格式内置解码,开箱即用
-- 💻 三平台一致:Linux(X11 + Wayland)/ Windows / macOS,安装包与系统"打开方式"集成完备
-
-**明确不做(non-goals)**
-
-- ❌ 图库管理(标签、人脸、云同步)→ digiKam / Lightroom 的领域
-- ❌ 专业修图(图层、蒙版)→ 仅保留轻编辑(裁剪 / 旋转 / 格式转换)
-- ❌ 视频播放
+> **EasyShow** is the project name (earlier working names: Lumen, Liteshow).
+> One-line goal: a desktop image viewer that is fast, smooth and sufficient, written in Rust, with one codebase for Linux, Windows and macOS.
+> References: qimgv (very fast), ImageGlass (feature-rich), nomacs — take the "fast and beautiful" intersection.
+> Current stage: M1/M2 and the M3+ map/format/UX tracks are delivered; maintenance and release work continues.
 
 ---
 
-## 2. 功能清单
+## 1. Goals and non-goals
 
-### P0 — v1 必须(首发可用)
+**Core goals**
 
-**A. 打开与格式**
+- ⚡ Fast: cold start < 500 ms; 24MP JPEG preview in tens of milliseconds; zoom/pan at ≥ 60 fps
+- 🪶 Small: no Electron/WebView, modest memory use and package size
+- 🖼 Format coverage: 18+ common formats built in, including phone HEIC/AVIF
+- 💻 Consistent across platforms: Linux (X11), Windows, macOS; installers and "Open with" integration
+- 🧭 Convenient: remembers the last browsed folder and restores it on launch
 
-| 编号 | 功能 | 说明 |
-|---|---|---|
-| A1 | 打开文件 / 文件夹 | 命令行参数、拖拽打开、菜单;"设为系统默认看图应用" |
-| A2 | 内置格式解码 | JPEG(含 CMYK/灰度)、PNG、GIF(动图)、WebP(静态+动图)、BMP、TIFF、ICO、TGA、PNM、QOI、HDR、EXR;HEIC/HEIF(经 libheif,覆盖 iPhone 照片) |
-| A3 | 健壮性 | 损坏 / 超大 / 未知文件:友好提示不崩溃;解码全部在工作线程,不卡 UI |
-| A4 | 状态记忆 | 窗口位置与大小、上次目录、最近打开列表、缩放偏好 |
-| A5 | 实况照片(LIVP) | 识别实况照片封装(ZIP:静帧 + 视频),展示封装内静帧并叠加「实况」徽标;动图播放见 P2 |
+**Explicit non-goals**
 
-**B. 浏览导航**
-
-| 编号 | 功能 | 说明 |
-|---|---|---|
-| B1 | 上一张 / 下一张 / 首 / 末 / 随机 | 工具栏按钮 + 键盘;边界循环可配置 |
-| B2 | 胶片条 + 缩略图网格 | 两种浏览模式一键切换,当前图高亮 |
-| B3 | 排序与过滤 | 按文件名 / 修改时间 / 大小排序;自动识别并隐藏非图片文件 |
-| B4 | 目录后台扫描 | 打开即异步建索引、并行生成缩略图,占位渐进呈现 |
-
-**C. 看图交互**
-
-| 编号 | 功能 | 说明 |
-|---|---|---|
-| C1 | 缩放 | 适应窗口 / 适应宽度 / 1:1 / 10%~800%;滚轮以光标为锚点缩放;双击在"适应 ↔ 1:1"间切换 |
-| C2 | 平移与旋转 | 拖动平移;90° 步进旋转;水平 / 垂直镜像;EXIF 方向自动校正 |
-| C3 | 沉浸体验 | 全屏 / 无边框;幻灯片(2/5/10 s 间隔、随机、循环);亮 / 暗主题 |
-| C4 | 信息面板 | 文件名、尺寸、大小、格式 + EXIF(相机、镜头、ISO、光圈、快门、焦距、拍摄时间) |
-| C5 | 快捷操作 | 全量快捷键;触控板捏合缩放;拖拽文件直接打开 |
-
-**D. 性能(核心卖点)**
-
-| 编号 | 功能 | 说明 |
-|---|---|---|
-| D1 | 渐进加载 | 先快速出低分辨率预览,随即补全清晰图(视觉零等待) |
-| D2 | 智能预取 | 按浏览方向预解码前后各 1~2 张 |
-| D3 | 三级缓存 | 缩略图磁盘缓存(跨会话复用)+ 位图内存 LRU + GPU 纹理池 |
-| D4 | 全异步可取消 | 扫描 / 解码 / 缩略图全部后台并行;切图即取消旧任务,快速连按不"追赶" |
-
-**E. 体验细节**
-
-- 中英双语:默认跟随系统语言,设置面板一键切换;文案集中管理,便于扩展更多语言
-- 主题色可换:内置 5 组强调色预设(天青蓝 / 翡翠绿 / 落日橙 / 樱花粉 / 紫罗兰),与亮 / 暗主题自由组合,配置持久化
-- 单实例运行(再次打开转交已有窗口);高 DPI(HiDPI)与多显示器适配
-
-### P1 — 增强(首发后第一个迭代)
-
-- 轻编辑:裁剪、任意角旋转、镜像;另存为 PNG / JPEG / WebP(质量可选)
-- 文件操作:重命名(F2)、删除到回收站(Delete)、移动、复制图像到剪贴板
-- 文件夹实时监控(notify):增删改即时刷新
-- 直方图面板;设为桌面壁纸(best-effort);SVG 查看(resvg)
-
-### P2 — 可选扩展(独立 feature,不进默认构建)
-
-- 重格式扩展:AVIF(dav1d)、RAW(rawler / libraw)、JPEG XL —— 均含 C 依赖,做成 feature 开关
-- 实况照片动图播放:需 HEVC 视频解码,评估三平台系统媒体框架(Windows MF / macOS AVFoundation / Linux GStreamer),不进默认包
-- ICC 色彩管理(lcms2):广色域照片正确显色
-- 批量处理(重命名 / 转换 / 缩放)、自定义快捷键、便携模式
+- ❌ Library management (tags, faces, cloud sync) — digiKam / Lightroom territory
+- ❌ Professional editing (layers, masks) — only light editing is planned
+- ❌ Video playback
 
 ---
 
-## 3. 技术方案
+## 2. Feature list
 
-### 3.1 GUI 框架选型(最关键的决策)
+### P0 — first release
 
-| 候选 | 优势 | 劣势 | 判定 |
-|---|---|---|---|
-| **eframe(egui)+ wgpu 后端** | 纯 Rust,零 C / 零 WebView 依赖;立即模式天然适合"重绘制、轻控件"的画布型应用;GPU 渲染三平台一致;拖拽、多窗口、纹理管理开箱即用 | 系统原生控件缺失需自绘主题;无障碍能力弱 | ✅ **采用** |
-| iced | Elm 架构,纯 Rust + wgpu | 画布型自定义交互代码量大;生态较小 | 备选 |
-| Slint | 声明式 DSL,运行性能好 | 桌面端 GPLv3 / 商业双许可,许可策略需注意;生态小于 egui | 备选 |
-| GTK4 | Linux 下观感原生 | Windows / macOS 集成与分发差、依赖重 | 排除 |
-| Tauri | Web 技术栈开发效率高 | 依赖系统 WebView,启动与内存与"轻量"目标冲突 | 排除 |
-| winit + wgpu 全自绘 | 极致可控、最轻 | 整套 UI 造轮子,成本高 | v2 内核化时再评估 |
+**A. Opening and formats**
 
-**结论**:eframe 自绘「现代简洁」风格(深色为默认,观感见 UI 设计稿),把最重的图像显示完全交给 GPU。
+| ID | Feature | Notes |
+|---|---|---|
+| A1 | Open file / folder | CLI argument, drag and drop, dialogs; optional default-viewer registration |
+| A2 | Built-in decoding | JPEG/PNG/GIF/WebP/BMP/TIFF/ICO/TGA/PNM/QOI; HEIC/AVIF via runtime libheif; JPEG XL/SVG/PSD/HDR/EXR through format features |
+| A3 | Robustness | Corrupt/oversized/unknown files fail gracefully; decoding runs off the UI thread |
+| A4 | State | Restore the last directory on launch (`state.json`); remember network settings (`config.json`) |
+| A5 | Live Photos | Recognized in principle; still images are shown, video playback is out of scope |
 
-### 3.2 工程结构(Cargo workspace)
+**B. Browsing and navigation**
+
+| ID | Feature | Notes |
+|---|---|---|
+| B1 | Previous/next/first/last | Toolbar and keyboard |
+| B2 | Thumbnail grid + subfolder cards | Current folder plus direct subfolders that contain photos; folder covers are stable random photos |
+| B3 | Sorting | Modified time (default, descending), EXIF capture time, name, created time, size, type |
+| B4 | Timeline | Year/month/day headers and a year/month navigator; click to jump; sticky headers |
+| B5 | Background scanning | Directory scans, EXIF times, GPS and folder summaries run in workers |
+
+**C. Viewing interaction**
+
+| ID | Feature | Notes |
+|---|---|---|
+| C1 | Zoom | Fit to window by default for every image; 1:1; cursor-anchored wheel zoom; double-click fit↔1:1 |
+| C2 | Pan and transform | Drag pan; 90° rotation; horizontal mirror; EXIF orientation corrected at decode |
+| C3 | Immersion | Fullscreen, slideshow (whole folder or selected batch), light/dark themes |
+| C4 | Info panel | File info plus full EXIF, GPS, place name and one-click text copy |
+| C5 | Shortcuts and gestures | Full keyboard shortcuts; trackpad pinch; drag and drop |
+
+**D. Performance**
+
+| ID | Feature | Notes |
+|---|---|---|
+| D1 | Display-size decoding | Decode for the physical viewport × DPR; full resolution on demand |
+| D2 | Neighbor prefetch | Prefetch adjacent images in navigation order |
+| D3 | Multi-level caching | Thumbnail disk cache (path + mtime + size), in-memory bitmap LRU, GPU textures |
+| D4 | Cancellable async work | Generation IDs discard stale decode results; workers never block the UI |
+
+**E. Details**
+
+- English/Chinese UI with a one-click toggle; default follows the system language
+- Light/dark themes following the system, with a manual override
+- HiDPI and multi-monitor friendly
+- Single-instance mode: still on the roadmap
+
+### P1 — enhancements
+
+- Light editing: crop, arbitrary rotation, mirror; save as PNG/JPEG/WebP
+- File operations: rename (F2), delete to trash, move, copy image to clipboard
+- Folder watcher with live refresh
+- Histogram panel; set as wallpaper; improved SVG support
+
+### P2 — optional extensions
+
+- RAW decoding, ICC color management (lcms2), live-photo video
+- Batch processing, custom shortcuts, portable mode
+
+---
+
+## 3. Technical design
+
+### 3.1 GUI framework
+
+| Candidate | Verdict |
+|---|---|
+| **eframe (egui) + glow** | ✅ Chosen: pure Rust, no WebView, immediate-mode canvas is a good fit, consistent GPU rendering across platforms |
+| iced | Fallback: larger canvas/custom-interaction effort |
+| Slint | Fallback: license considerations |
+| GTK4 | Rejected: poor Windows/macOS distribution |
+| Tauri | Rejected: system WebView conflicts with the lightweight goal |
+
+The UI is custom-drawn in a modern, minimal style; the image canvas is fully GPU-rendered.
+
+### 3.2 Workspace layout
 
 ```
 easyshow/
-├── Cargo.toml                  # workspace:统一依赖版本;release 开 thin-LTO / strip / codegen-units=1
+├── Cargo.toml                  # workspace; release: thin LTO, strip, codegen-units=1
 ├── crates/
-│   ├── easyshow-core/             # 纯逻辑,零 UI 依赖 → 可做基准测试、可复用
-│   │   ├── codec/              # 格式分发:zune-jpeg 快速路径 + image 兜底
-│   │   ├── resize/             # fast_image_resize 封装(SIMD)
-│   │   ├── exif/               # EXIF 解析、方向校正
-│   │   ├── thumb/              # 缩略图生成管线(并行)
-│   │   ├── cache/              # 磁盘缓存(blake3 指纹)+ 内存 LRU
-│   │   └── index/              # 目录扫描、过滤、排序
-│   └── easyshow-app/              # eframe 应用:UI、输入、状态机
-│       ├── ui/                 # 工具栏 / 画布 / 胶片条 / 网格 / 信息面板 / 设置
-│       ├── viewer/             # 缩放平移变换、纹理管理、渐进加载状态机
-│       ├── input/              # 快捷键与手势映射
-│       └── config/             # TOML 配置持久化
-└── packaging/                  # 图标、.desktop、cargo-packager 清单
+│   ├── easyshow-core/          # no UI: formats, resize, EXIF, thumbnails, time utilities
+│   │   ├── codec/              # format probing and decoders (image, libheif, JXL, SVG, PSD...)
+│   │   ├── resize/             # fast_image_resize wrapper (SIMD)
+│   │   ├── exif.rs             # EXIF parsing, orientation, GPS
+│   │   ├── thumb.rs            # thumbnail pipeline (embedded HEIC thumbnail fast path)
+│   │   └── timeutil.rs         # EXIF capture time and local wall-clock conversion
+│   └── easyshow-app/           # eframe application
+│       ├── app.rs              # state, modes, worker polling, navigation
+│       ├── ui.rs               # toolbar, tree, grid/timeline, info panel, status
+│       ├── map.rs              # map view, clusters, cluster gallery
+│       ├── thumbs.rs / decode.rs / time_scan.rs / folders.rs / geo_scan.rs
+│       └── config.rs           # config.json + state.json
+└── packaging/                  # installer scripts, CI helpers, map assets
 ```
 
-### 3.3 关键依赖选型
+### 3.3 Key dependencies
 
-| 用途 | crate | 说明 |
+| Purpose | Crate | Notes |
 |---|---|---|
-| 窗口 / UI / GPU | eframe(egui)+ wgpu | glow 后端作兼容回退;三平台同一套渲染路径 |
-| 解码 | image(裁剪 feature)+ zune-jpeg + image-webp + gif | image 覆盖广;[zune-jpeg](https://github.com/etemesi254/zune-image) 是最快的纯 Rust JPEG 解码器之一,内部已有降采样 IDCT 优化路径 |
-| HEIC 解码 | 运行时加载 libheif(libloading FFI),cargo feature `heic`(默认开) | 编译期零 C 依赖:首次打开 HEIC 时动态加载系统 libheif,缺失时友好降级(仅该格式不可用)。已落地于 `easyshow-core::codec::heif`;**关闭 feature(轻量版 lite)则整套 HEIF 代码编译剔除**(HEIC/AVIF 不再被识别),发行时按 full/lite 两个变体成套出包 |
-| 高质量重采样 | fast_image_resize | AVX2 / NEON SIMD,比 image 内置缩放快数倍 |
-| EXIF | kamadak-exif | 方向、相机参数 |
-| 并行与通道 | rayon + crossbeam-channel | 解码池 + 任务取消(generation id) |
-| 缓存指纹 | blake3 | 路径 + 大小 + mtime 内容指纹 |
-| 目录监控(P1) | notify | 跨平台文件系统事件 |
-| 回收站(P1) | trash | 三平台删除到回收站 |
-| 联网(地名/在线瓦片) | ureq 3 + rustls(ring)+ webpki-roots | 阻塞式 HTTP 跑在既有工作线程里,不引入异步运行时;纯 Rust、无外部 DLL;联网默认关闭,坐标按位置缓存 |
-| 扩展格式 | jxl-oxide(JPEG XL)、resvg/usvg(SVG)、psd 0.3(PSD)、image 的 hdr/exr 特性 | 全部纯 Rust,无外部 DLL;HDR/EXR/浮点 JXL 走统一色调映射;轻量版通过 `formats` feature 剔除 |
-| 动图 | image 的 GifDecoder + image-webp | 后台线程流式解码、有界通道传递帧,大动图内存可控;浏览模式播放/暂停 |
-| CLI / 配置 / 日志 | clap / serde + toml / tracing | |
-| 打包 | cargo-packager + GitHub Actions | AppImage/deb/rpm、msi/zip、dmg,三平台矩阵 |
+| Window/UI/GPU | eframe/egui (glow) | X11 on Linux; no wayland-client dependency in the current build |
+| Decoding | image, zune-jpeg, image-webp | image covers most formats; zune-jpeg is a fast pure-Rust JPEG path |
+| HEIC/AVIF | runtime libheif via libloading, feature `heic` | No compile-time C dependency; friendly degradation if the library is missing |
+| Resize | fast_image_resize | AVX2/NEON SIMD |
+| EXIF | kamadak-exif | Orientation, camera data, GPS |
+| Extended formats | jxl-oxide, resvg/usvg/fontdb, psd, image hdr/exr | Pure Rust, feature-gated by `formats` |
+| Animation | image GifDecoder, image-webp | Streaming frames with a bounded channel |
+| Networking | ureq 3 + rustls/ring + webpki-roots | Blocking HTTP in workers; online features off by default |
+| JSON/config | serde_json | Platform config directory |
+| Clipboard/UI | egui built-ins | Info copy and language/theme toggles |
+| Packaging | shell scripts + GitHub Actions | Windows NSIS/zip; Linux deb/tar; macOS app/dmg |
 
-默认关闭 `image` 未用的格式 feature 以控制体积。HEIC 与 AVIF 由 `heic` feature 门控(默认开;lite 变体 `--no-default-features` 关闭,连同 libloading 依赖一并剔除);RAW / JXL 另留 feature 位。
+The feature flags:
+- `heic` (default in full): HEIC/AVIF support and libloading
+- `formats` (default in full): JPEG XL, SVG, PSD, HDR/EXR, animation
+- Full = default features; lite = `--no-default-features` (frozen since 0.2.3)
 
-### 3.4 核心机制(为什么快)
+### 3.4 Why it is fast
 
-1. **解码分级**
-   - 预览级:[zune-jpeg](https://github.com/etemesi254/zune-image) 多线程 / SIMD 快速解码 24MP JPEG 约数十毫秒,经 fast_image_resize 立即降采样上屏(视觉零等待);
-   - 显示级:按「物理视口 × DPR」尺寸产出纹理 —— 不为看不见的像素花内存和算力;
-   - 全尺寸:放大超过显示级时按需补齐。JPEG 的 DCT 缩放解码(1/2~1/8)作为后续优化项预留;
-   - HEIC:优先读取内嵌缩略图秒出预览,再由 libheif 解码主图补齐(HEIC 无 JPEG 式渐进解码);实况照片取封装内静帧。
-2. **取消式并发**:每次切图携带 generation id,过期解码结果直接丢弃 —— 快速连按不卡"追赶",这是同类软件最常见的卡顿源。
-3. **三级缓存**:磁盘缩略图(跨会话秒开目录)→ 内存位图 LRU(容量可配)→ GPU 纹理池(视口外回收)。
-4. **GPU 变换**:位图上传一次,缩放 / 平移 / 旋转全部由 GPU 变换矩阵完成,交互过程零解码、零拷贝。
-5. **动图**:gif / image-webp 按帧解码 + 帧缓存上限,按帧延迟定时播放。
+1. **Decode tiers**
+   - Thumbnails are decoded at display size (or from an embedded HEIC thumbnail) and downsampled immediately.
+   - The viewer decodes at physical viewport × DPR, then requests full resolution only when zoomed beyond it.
+2. **Cancellable concurrency**: every image change carries a generation ID; stale results are discarded, so rapid navigation never catches up with old work.
+3. **Caching**: disk thumbnails (cross-session), in-memory bitmap LRU, GPU textures with viewport-aware eviction.
+4. **GPU transforms**: the image is uploaded once; zoom/pan/rotation are transform operations.
+5. **Viewport priority**: huge folders decode only the visible area (±2 rows), with map and gallery thumbnails scheduled under a per-screen budget.
 
-### 3.5 跨平台与发布
+### 3.5 Cross-platform and release
 
-- 构建矩阵:linux-x86_64 / linux-aarch64(AppImage、deb、rpm)、windows-x86_64(msi、免安装 zip)、macOS Universal(x86_64 + aarch64,dmg)
-- CI:GitHub Actions 三平台矩阵,cargo-packager(备选 cargo-dist)一键产出全部产物
-- libheif 仅作为运行时可选依赖(编译期无 C 工具链要求);发行包默认不随附,系统有库即启用 HEIC
-- 文件关联:.desktop(MimeType)/ Windows 注册表 / macOS Info.plist CFBundleDocumentTypes
-- 配置与缓存目录:directories 库遵循各平台惯例;内嵌 Noto Sans SC 子集(约 2 MB)保证三平台中文渲染一致
+- Build targets: Linux x86_64, Windows x86_64, macOS universal (scripts; only Windows is published at the moment)
+- CI: `.github/workflows/release.yml`; currently Windows-only until the Windows package has been validated. Restore the Linux/macOS jobs after validation.
+- libheif is a runtime dependency: Windows bundles the DLL closure; Linux uses system `libheif1`; macOS bundles it in the app.
+- File associations: `.desktop`, Windows registry, macOS Info.plist.
+- Config/cache directories follow platform conventions; the bundled CJK font fallback is selected from system fonts.
 
-### 3.6 性能验收指标(SLO)
+### 3.6 Performance targets
 
-| 指标 | 目标 |
+| Metric | Target |
 |---|---|
-| 冷启动到首帧 | < 500 ms(力争 ~300 ms) |
-| 24MP JPEG:预览 → 清晰 | < 80 ms → < 150 ms |
-| 100 张 24MP 目录缩略图(冷缓存,8 线程) | < 2 s |
-| 缩放 / 平移 | ≥ 60 fps |
-| 空载内存 / 安装包体积 | < 120 MB / < 25 MB(含随附 libheif 动态库) |
+| Cold start to first frame | < 500 ms |
+| 24MP JPEG: preview → sharp | tens of ms → < 150 ms |
+| 100 thumbnails of 24MP photos (cold cache) | a few seconds |
+| Zoom/pan | ≥ 60 fps |
+| Idle memory / installer size | modest; no WebView |
 
-easyshow-core 配 criterion 基准(decode / resize / thumbnail),防性能回归。
+Measured on release builds: 24MP JPEG full decode ~104 ms; display-size texture 2100×1400 for a 24MP source.
 
-> **M1 实测**(2026-10,Linux,release 构建):24MP JPEG 整图解码 **104 ms**(zune-jpeg)+ SIMD 降采样 6000×4000 → 2100×1400 **151 ms**(首次调用含 CPU 扩展探测);GUI 三场景(JPEG / HEIC / 24MP 目录)无头截图验证通过,截图见 `docs/screenshots/`。
+### 3.7 Risks and mitigations
 
-### 3.7 风险与对策
-
-| 风险 | 对策 |
+| Risk | Mitigation |
 |---|---|
-| 超大图(> 100MP)超过 GPU 纹理上限(常见 16384px) | v1:CPU 降采样显示并提示;v2:分块金字塔(tile pyramid) |
-| HEIC 依赖运行时 libheif,缺失则无法解码 | 编译期零依赖;发行包默认不随附库文件(保持轻量),缺库时仅 HEIC/AVIF 降级提示;可按需打"完整版"包 |
-| egui 默认观感偏"开发工具" | 自绘统一主题(间距 / 圆角 / 图标规范),以 UI 设计稿为准 |
-| 动图 / 超长图的帧与内存 | 帧按需解码 + 帧缓存上限;超长图 v1 降采样,v2 分块显示 |
-| 广色域照片偏色(无色彩管理) | v1 文档标注;v2 接 lcms2 做 ICC 管理 |
+| Huge images exceed GPU texture limits | Downsample for display; tiling is a future enhancement |
+| HEIC needs libheif | Runtime loading with graceful degradation; Windows bundles the DLL closure |
+| Many clusters on a map overwhelm the thumbnail queue | Per-screen budget, larger clusters first, virtualized cluster gallery |
+| Wide-gamut photos look wrong without color management | Documented limitation; ICC support is future work |
+| Reading phone photos (MTP/PTP) needs platform work | Planned as a device import/browse feature; not part of the current release |
 
 ---
 
-## 4. 里程碑
+## 4. Milestones
 
-| 阶段 | 内容 | 预估 | 状态 |
-|---|---|---|---|
-| M1 骨架 | 窗口、打开文件 / 文件夹与拖拽、单图显示、缩放平移、核心快捷键 | ~1 周 | ✅ 已交付(含 HEIC 运行时解码) |
-| M2 浏览 | 目录索引、胶片条 / 网格、排序、缩略图缓存、渐进加载、EXIF 方向 | 1.5~2 周 | ✅ 主体已交付(目录树 + 缩略图网格/磁盘缓存 + 双模式 + EXIF 信息面板 + 预取);待补:排序选项、两级渐进解码 |
-| M3 打磨 | 动图、幻灯片、全屏、主题与双语、配置、单实例、信息面板 | ~1 周 | 幻灯片/全屏/主题双语/信息面板/批量删除已交付 |
-| M3+ 位置与地图 | 逆地理编码(高德/OSM)、地图模式(离线世界图 + 在线瓦片、GPS 聚合)、联网开关与缓存 | ~1 周 | ✅ 已交付(联网默认关闭;GCJ-02 对齐;瓦片/地名磁盘缓存;聚合点缩略图 + 弹层) |
-| M3+ 扩展格式与动图 | HDR/EXR、JPEG XL、SVG、PSD、GIF/WebP 动图;地图聚合改为缩略图展示 | ~1 周 | ✅ 已交付(只随完整版发布;lite 自 0.2.3 冻结) |
-| M3++ 目录与时间轴 | 子目录卡片(随机封面/双击进入)、年/月/日时间轴与右侧导航、EXIF 拍摄时间排序(缺省文件时间)、聚合最多 4 张缩略图、HEIC 内嵌缩略图快路径 | ~1 周 | ✅ 已交付(0.2.5) |
-| M3++ 离线省界 | 中国省界高分蒙版(省界/九段线)、省名随缩放标注;离线支持到 z6,在线瓦片仍优先 | ~1 周 | ✅ 已交付(0.2.5,DataV.GeoAtlas 边界数据) |
-| M3++ 交互与地图修复 | 默认适应窗口、信息一键复制、聚合缩略图纹理统一上传与调度、聚合查看页(全部照片,Esc 返回原地图) | ~3 天 | ✅ 已交付(0.2.6) |
-| M4 发布 | 三平台 CI、安装包、文件关联、README 与许可(MIT OR Apache-2.0) | ~1 周 | 本机已产出 deb/tar.gz/Windows zip+NSIS(交叉编译);macOS 走 CI(`.github/workflows/release.yml`) |
-| P1 / P2 | 轻编辑与文件操作 / 重格式与色彩管理 | 按需排期 | |
+| Stage | Content | Status |
+|---|---|---|
+| M1 foundation | Window, open file/folder, drag & drop, single image, zoom/pan, shortcuts | ✅ Delivered (including runtime HEIC decoding) |
+| M2 browsing | Folder index, thumbnail grid, sorting, disk cache, progressive loading, EXIF orientation | ✅ Delivered (folder tree, subfolder cards, timeline, viewport priority) |
+| M3 polish | Animation, slideshow, fullscreen, themes and bilingual UI, config, info panel | ✅ Mostly delivered (single instance pending) |
+| M3+ location and map | Reverse geocoding (AMap/OSM), map mode with clusters, online toggle and caches | ✅ Delivered (offline world map, GCJ-02, online tiles) |
+| M3+ extended formats | HDR/EXR, JPEG XL, SVG, PSD, GIF/WebP animation | ✅ Delivered |
+| M3++ folders and timeline | Subfolder cards, year/month/day timeline, EXIF capture time, HEIC embedded thumbnails | ✅ Delivered (0.2.5) |
+| M3++ offline province map | China province boundaries (including the nine-dash line) and labels | ✅ Delivered (0.2.5) |
+| M3++ UX and map fixes | Fit-to-window default, copy info, thumbnail texture upload/scheduling, full cluster gallery | ✅ Delivered (0.2.6) |
+| State and documentation | Last-directory restore, English-default docs with Chinese versions | ✅ Delivered (0.2.7) |
+| M4 release | Windows full builds published; Linux/macOS after validation | 🔄 Windows done, other platforms pending |
 
 ---
 
-## 5. UI 设计说明(对应设计稿)
+## 5. UI notes
 
-**布局(单窗口三段式)**
+- Top: toolbar (open / folder │ tree/info │ map │ prev/next │ viewer controls │ fullscreen · language · sort · slideshow · settings)
+- Center: grid with subfolder cards and timeline, viewer canvas, or map
+- Left: folder tree; right: info panel with EXIF and copy
+- Bottom: status bar (file name, index, dimensions, format, size, modified date, zoom)
+- Dark theme by default, light theme switchable; accent color follows the system palette
+- Bilingual UI: English/Chinese toggle in the toolbar
 
-- 顶部:自绘标题栏(应用名 + 当前文件夹)+ 工具栏(打开 / 文件夹 │ 前后翻页 │ 网格 │ 缩放组 │ 适应 · 1:1 │ 旋转 · 镜像 │ 幻灯片 · 全屏 │ 主题 · 设置 · 信息)
-- 中部:图像画布(照片居中投影;左上页码胶囊「3 / 128」;底部悬浮缩放胶囊 − 100% +;右下预取状态)
-- 右侧:信息面板(文件信息 + EXIF + 直方图 + 实况照片标识),可折叠
-- 设置弹层:主题色色板(5 组预设)与中 / 英语言切换,即点即生效
-- 底部:缩略图胶片条(当前高亮)+ 状态栏(文件名 │ 序号 │ 尺寸 · 格式 · 缩放)
+---
 
-**交互要点(设计稿可实际点按体验)**
+## 6. Development notes
 
-- 点击缩略图 / 前后按钮切图;缩放按钮与「适应 / 1:1」;双击画布在适应与 1:1 间切换;旋转 / 镜像实时生效;幻灯片一键播放
-- 深色为默认主题、浅色主题可切换;强调色 5 组预设可换;中英语言一键切换;实况照片(HEIC)显示「实况」徽标
-
-**风格**:深色底 + 天青蓝强调,大圆角、细描边、浮层毛玻璃质感 —— 「快而美」的产品气质。
+- Mainland China mirror: `~/.cargo/config.toml` uses the USTC crates mirror.
+- Tests: `cargo test --workspace` (decoder/format fixtures in `testdata/`); UI smoke tests are run on Xvfb during development.
+- Packaging scripts are under `packaging/`; see the publishing guide.
