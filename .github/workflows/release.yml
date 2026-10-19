@@ -109,7 +109,7 @@ jobs:
       - name: Bundle + dmg
         run: |
           set -o pipefail
-          if ! bash packaging/macos/make-bundle.sh universal both > build-bundle.log 2>&1; then
+          if ! bash packaging/macos/make-bundle.sh universal full > build-bundle.log 2>&1; then
             {
               echo '### macOS packaging failed'
               echo '```'
