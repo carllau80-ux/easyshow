@@ -540,6 +540,38 @@ pub fn tree_panel(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Explorer-style thin chevron used for expandable tree rows.
+fn tree_chevron(ui: &mut egui::Ui, expanded: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
+    let color = if response.hovered() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let center = rect.center();
+    let points = if expanded {
+        [
+            center + egui::vec2(-4.0, -2.0),
+            center + egui::vec2(0.0, 2.5),
+            center + egui::vec2(4.0, -2.0),
+        ]
+    } else {
+        [
+            center + egui::vec2(-2.0, -4.0),
+            center + egui::vec2(2.5, 0.0),
+            center + egui::vec2(-2.0, 4.0),
+        ]
+    };
+    let stroke = egui::Stroke::new(1.5, color);
+    let painter = ui.painter();
+    painter.line_segment([points[0], points[1]], stroke);
+    painter.line_segment([points[1], points[2]], stroke);
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
 fn render_node(
     ui: &mut egui::Ui,
     node: &mut TreeNode,
@@ -549,8 +581,7 @@ fn render_node(
 ) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        let arrow = if node.expanded { "▼" } else { "▶" };
-        if ui.add(egui::Button::new(arrow).small().frame(false)).clicked() {
+        if tree_chevron(ui, node.expanded).clicked() {
             actions.push(TreeAction::Toggle(node.path.clone()));
         }
         let selected = node.path.as_path() == current;
@@ -751,6 +782,8 @@ fn build_layout(app: &EasyShowApp, cols: usize) -> GridLayout {
 pub fn grid(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     let lang = app.lang;
     let palette = Palette::for_ui(ui);
+    // CentralPanel has no frame: paint the theme canvas explicitly so light mode is not black.
+    ui.painter().rect_filled(ui.max_rect(), 0.0, palette.canvas_bg);
     if app.entries.is_empty() && app.folder_cards.is_empty() {
         ui.vertical_centered(|ui| {
             ui.add_space(90.0);
@@ -780,26 +813,24 @@ pub fn grid(app: &mut EasyShowApp, ui: &mut egui::Ui) {
                 .sum();
             ui.strong(tr(lang, Key::SelectedCount).replace("{n}", &count.to_string()));
             ui.weak(human_size(total));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let response = ui.add_enabled(
-                    app.delete_enabled,
-                    egui::Button::new(tr(lang, Key::DeleteSelected)),
-                );
-                let response = response.on_hover_text(if app.delete_enabled {
-                    tr(lang, Key::Delete)
-                } else {
-                    tr(lang, Key::DeleteEnableHint)
+            if app.delete_enabled {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let response = ui
+                        .button(tr(lang, Key::DeleteSelected))
+                        .on_hover_text(tr(lang, Key::Delete));
+                    if response.clicked() {
+                        delete = true;
+                    }
+                    if ui.button(tr(lang, Key::ClearSelection)).clicked() {
+                        clear = true;
+                    }
+                    if ui.button(tr(lang, Key::SelectAll)).clicked() {
+                        select_all = true;
+                    }
                 });
-                if response.clicked() {
-                    delete = true;
-                }
-                if ui.button(tr(lang, Key::ClearSelection)).clicked() {
-                    clear = true;
-                }
-                if ui.button(tr(lang, Key::SelectAll)).clicked() {
-                    select_all = true;
-                }
-            });
+            } else {
+                ui.weak(tr(lang, Key::DeleteEnableHint));
+            }
         });
         if select_all {
             app.select_all();
@@ -942,9 +973,9 @@ pub fn grid(app: &mut EasyShowApp, ui: &mut egui::Ui) {
                                     _ => palette.text_dim,
                                 };
                                 let font = match level {
-                                    0 => egui::FontId::proportional(15.0),
-                                    1 => egui::FontId::proportional(13.0),
-                                    _ => egui::FontId::proportional(11.5),
+                                    0 => egui::FontId::proportional(17.0),
+                                    1 => egui::FontId::proportional(14.5),
+                                    _ => egui::FontId::proportional(12.5),
                                 };
                                 let rect = egui::Rect::from_min_size(
                                     egui::pos2(left, top + row.y),
@@ -1068,8 +1099,8 @@ fn draw_photo_tile(
     to_upload: &mut Vec<std::path::PathBuf>,
 ) -> egui::Response {
     let palette = Palette::for_ui(ui);
-    let (card_bg, thumb_bg, text_dim, accent) =
-        (palette.card_bg, palette.thumb_bg, palette.text_dim, palette.accent);
+    let (card_bg, thumb_bg, text_dim, selection) =
+        (palette.card_bg, palette.thumb_bg, palette.text_dim, palette.selection);
     let painter = ui.painter();
     let entry = &app.entries[index];
     let path = &entry.path;
@@ -1100,14 +1131,14 @@ fn draw_photo_tile(
         painter.rect_stroke(
             rect,
             egui::CornerRadius::same(8),
-            egui::Stroke::new(2.0, accent),
+            egui::Stroke::new(2.0, selection),
             egui::StrokeKind::Inside,
         );
     } else if selected {
         painter.rect_stroke(
             rect,
             egui::CornerRadius::same(8),
-            egui::Stroke::new(1.5, accent.gamma_multiply(0.6)),
+            egui::Stroke::new(1.5, selection.gamma_multiply(0.75)),
             egui::StrokeKind::Inside,
         );
     }
@@ -1207,7 +1238,7 @@ fn draw_folder_tile(
         painter.rect_stroke(
             rect,
             egui::CornerRadius::same(8),
-            egui::Stroke::new(2.0, palette.accent),
+            egui::Stroke::new(2.0, palette.selection),
             egui::StrokeKind::Inside,
         );
     }
@@ -1251,7 +1282,7 @@ fn draw_timeline(app: &mut EasyShowApp, ui: &mut egui::Ui, layout: &GridLayout, 
     ui.add_space(10.0);
     ui.horizontal(|ui| {
         ui.add_space(12.0);
-        ui.label(egui::RichText::new(tr(lang, Key::Timeline)).size(11.0).color(dim));
+        ui.label(egui::RichText::new(tr(lang, Key::Timeline)).size(12.0).color(dim));
     });
     ui.add_space(4.0);
 
@@ -1263,16 +1294,16 @@ fn draw_timeline(app: &mut EasyShowApp, ui: &mut egui::Ui, layout: &GridLayout, 
             ui.set_width(ui.available_width());
             for (year, months) in &layout.groups {
                 let year_active = active.map(|(y, _)| y == *year).unwrap_or(false);
-                let year_color = if year_active { accent } else { dim };
+                let year_color = if year_active { accent } else { ui.visuals().text_color() };
                 let response = ui.add(
                     egui::Button::new(
                         egui::RichText::new(year.to_string())
-                            .size(12.0)
+                            .size(15.0)
                             .strong()
                             .color(year_color),
                     )
                     .frame(false)
-                    .min_size(egui::vec2(100.0, 20.0)),
+                    .min_size(egui::vec2(100.0, 24.0)),
                 );
                 if response.clicked() {
                     clicked = layout
@@ -1292,7 +1323,7 @@ fn draw_timeline(app: &mut EasyShowApp, ui: &mut egui::Ui, layout: &GridLayout, 
                             format!("{month:02}")
                         };
                         let response = ui.add(
-                            egui::Button::new(egui::RichText::new(label).size(11.0).color(color))
+                            egui::Button::new(egui::RichText::new(label).size(12.0).color(color))
                                 .frame(false),
                         );
                         if response.clicked() {
@@ -1306,7 +1337,7 @@ fn draw_timeline(app: &mut EasyShowApp, ui: &mut egui::Ui, layout: &GridLayout, 
                             egui::Layout::right_to_left(egui::Align::Center),
                             |ui| {
                                 ui.add_space(8.0);
-                                ui.weak(egui::RichText::new(count.to_string()).size(9.5));
+                                ui.weak(egui::RichText::new(count.to_string()).size(10.0));
                             },
                         );
                     });
@@ -1423,6 +1454,7 @@ pub fn canvas(app: &mut EasyShowApp, ui: &mut egui::Ui) {
 
 pub fn info_panel(app: &mut EasyShowApp, ui: &mut egui::Ui) {
     let lang = app.lang;
+    let mut map_target: Option<(f64, f64)> = None;
     ui.add_space(8.0);
     let copy_text = if app.selected_folder.is_none() { clipboard_info(app) } else { String::new() };
     let mut copy_clicked = false;
@@ -1520,22 +1552,28 @@ pub fn info_panel(app: &mut EasyShowApp, ui: &mut egui::Ui) {
             if let Some((lat, lon)) = exif.gps {
                 let coords = format!("{lat:.6}, {lon:.6}");
                 let place_label = app.place.as_ref().and_then(|p| p.label());
-                let value = if let Some(label) = &place_label {
-                    label.clone()
+                if let Some(label) = place_label {
+                    kv(ui, tr(lang, Key::Location), label);
+                    if kv_link(ui, tr(lang, Key::Coordinates), coords, lang) {
+                        map_target = Some((lat, lon));
+                    }
                 } else if app.place_loading {
-                    tr(lang, Key::Locating).to_string()
-                } else {
-                    coords.clone()
-                };
-                kv(ui, tr(lang, Key::Location), value);
-                if place_label.is_some() {
-                    kv(ui, tr(lang, Key::Coordinates), coords);
+                    kv(ui, tr(lang, Key::Location), tr(lang, Key::Locating).to_string());
+                    if kv_link(ui, tr(lang, Key::Coordinates), coords, lang) {
+                        map_target = Some((lat, lon));
+                    }
+                } else if kv_link(ui, tr(lang, Key::Location), coords, lang) {
+                    map_target = Some((lat, lon));
                 }
             }
         }
         None => {
             ui.weak(tr(lang, Key::NoExif));
         }
+    }
+
+    if let Some((lat, lon)) = map_target {
+        app.show_photo_on_map(ui.ctx(), lat, lon);
     }
 }
 
@@ -1602,6 +1640,20 @@ fn clipboard_info(app: &EasyShowApp) -> String {
         }
     }
     lines.join("\n")
+}
+
+fn kv_link(ui: &mut egui::Ui, label: &str, value: String, lang: Lang) -> bool {
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        ui.weak(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let response = ui.link(value).on_hover_text(tr(lang, Key::ShowOnMap));
+            if response.clicked() {
+                clicked = true;
+            }
+        });
+    });
+    clicked
 }
 
 fn kv(ui: &mut egui::Ui, label: &str, value: String) {
@@ -1777,6 +1829,7 @@ const COMPONENTS: &[(&str, &str, &str, &str)] = &[
     ("Natural Earth / world-atlas", "离线世界地图", "Offline world map", "Public Domain / ISC"),
     ("DataV.GeoAtlas / 高德地图", "离线中国省界", "Offline China provinces", "Data © service providers"),
     ("Phosphor Icons", "工具栏图标", "Toolbar icons", "MIT"),
+    ("webbrowser", "打开外部链接", "Open external links", "MIT / Apache-2.0"),
 ];
 
 pub fn about_modals(app: &mut EasyShowApp, ctx: &egui::Context) {

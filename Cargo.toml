@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/easyshow-core", "crates/easyshow-app"]
 
 [workspace.package]
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -24,7 +24,7 @@ log = "0.4"
 
 # --- easyshow-app ---
 eframe = { version = "0.37", default-features = false, features = [
-    "glow", "x11", "default_fonts",
+    "glow", "x11", "default_fonts", "links",
 ] }
 clap = { version = "4", features = ["derive"] }
 crossbeam-channel = "0.5"

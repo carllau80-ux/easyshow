@@ -14,6 +14,7 @@ EasyShow 本体采用 MIT OR Apache-2.0。以下为随二进制分发的主要�
 | serde_json | JSON | MIT / Apache-2.0 |
 | libc | 本地时间转换 | MIT / Apache-2.0 |
 | crossbeam-channel | 工作线程通信 | MIT / Apache-2.0 |
+| webbrowser | 打开外部链接(关于/GitHub) | MIT / Apache-2.0 |
 | jxl-oxide | JPEG XL 解码 | Apache-2.0 |
 | resvg / usvg / tiny-skia / fontdb | SVG 渲染与字体 | MPL-2.0 / MIT / BSD-3-Clause |
 | psd | PSD 合成图 | MIT |

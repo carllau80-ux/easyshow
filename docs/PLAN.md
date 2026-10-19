@@ -203,6 +203,7 @@ Measured on release builds: 24MP JPEG full decode ~104 ms; display-size texture 
 | M3++ UX and map fixes | Fit-to-window default, copy info, thumbnail texture upload/scheduling, full cluster gallery | ✅ Delivered (0.2.6) |
 | State and documentation | Last-directory restore, English-default docs with Chinese versions | ✅ Delivered (0.2.7) |
 | Navigation and safety | Explorer-style address bar (history/refresh), selection bar, mandatory delete confirmation, About/contact, open-source notices | ✅ Delivered (0.2.8) |
+| Visual and interaction polish | Fixed high-contrast selection ring, Explorer tree chevrons, larger timeline headings, clickable GPS coordinates, working external links | ✅ Delivered (0.2.9) |
 | M4 release | Windows full builds published; Linux/macOS after validation | 🔄 Windows done, other platforms pending |
 
 ---

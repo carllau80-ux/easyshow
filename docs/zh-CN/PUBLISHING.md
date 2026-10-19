@@ -11,8 +11,8 @@
 版本号唯一来源是 `Cargo.toml` 的 `[workspace.package] version`。
 
 ```bash
-packaging/bump-version.sh          # 0.2.7 → 0.2.8
-packaging/bump-version.sh minor    # 0.2.8 → 0.3.0
+packaging/bump-version.sh          # 0.2.8 → 0.2.9
+packaging/bump-version.sh minor    # 0.2.9 → 0.3.0
 ```
 
 版本号会进入窗口/CLI、安装包文件名、设置菜单和 Release 资产名。

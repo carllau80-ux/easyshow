@@ -14,6 +14,7 @@ EasyShow itself is licensed under MIT OR Apache-2.0. The main third-party compon
 | serde_json | JSON | MIT / Apache-2.0 |
 | libc | Local time conversion | MIT / Apache-2.0 |
 | crossbeam-channel | Worker communication | MIT / Apache-2.0 |
+| webbrowser | Opening external links (About/GitHub) | MIT / Apache-2.0 |
 | jxl-oxide | JPEG XL decoding | Apache-2.0 |
 | resvg / usvg / tiny-skia / fontdb | SVG rendering and fonts | MPL-2.0 / MIT / BSD-3-Clause |
 | psd | PSD composite decoding | MIT |

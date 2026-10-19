@@ -156,6 +156,7 @@ pub enum Key {
     DeleteNote,
     DeleteSummary,
     DeleteEnableHint,
+    ShowOnMap,
     // 关于 / 开源
     About,
     AboutTitle,
@@ -289,6 +290,7 @@ pub fn tr(lang: Lang, key: Key) -> &'static str {
         (Lang::Zh, DeleteNote) => "将移入系统回收站,可从回收站恢复。",
         (Lang::Zh, DeleteSummary) => "删除完成:成功 {ok} 张,失败 {fail} 张。",
         (Lang::Zh, DeleteEnableHint) => "请先在设置中开启「允许删除」",
+        (Lang::Zh, ShowOnMap) => "在地图中显示",
         (Lang::Zh, About) => "关于 EasyShow",
         (Lang::Zh, AboutTitle) => "关于 EasyShow",
         (Lang::Zh, AboutDesc) => "轻量级跨平台图片查看器,用 Rust 编写。",
@@ -417,6 +419,7 @@ pub fn tr(lang: Lang, key: Key) -> &'static str {
         (Lang::En, DeleteNote) => "Moves to the system trash; you can restore it later.",
         (Lang::En, DeleteSummary) => "Delete finished: {ok} moved to trash, {fail} failed.",
         (Lang::En, DeleteEnableHint) => "Enable \"Allow delete\" in Settings first",
+        (Lang::En, ShowOnMap) => "Show on map",
         (Lang::En, About) => "About EasyShow",
         (Lang::En, AboutTitle) => "About EasyShow",
         (Lang::En, AboutDesc) => "A lightweight, cross-platform image viewer written in Rust.",

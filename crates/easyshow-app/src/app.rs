@@ -1166,6 +1166,42 @@ impl EasyShowApp {
         }
     }
 
+    /// 从信息面板的坐标跳转到地图上的对应位置。
+    pub fn show_photo_on_map(&mut self, ctx: &egui::Context, lat: f64, lon: f64) {
+        let keep = self.current_path().cloned();
+        self.ensure_identity_order();
+        if let Some(path) = keep {
+            if let Some(pos) = self.entries.iter().position(|entry| entry.path == path) {
+                self.selected = pos;
+                self.selection.clear();
+                self.selection.insert(pos);
+                self.selection_anchor = pos;
+            }
+        }
+        self.slideshow = None;
+        self.stop_anim();
+        self.mode = Mode::Map;
+        self.map_focus = None;
+        self.set_visible_thumbs(Vec::new());
+        let online = self.tile_kind().is_some();
+        let gcj = self.tile_kind() == Some(TileKind::Amap);
+        self.map.center = if gcj {
+            crate::geo::wgs84_to_gcj02((lat, lon))
+        } else {
+            (lat, lon)
+        };
+        self.map.zoom = if online { 11.0_f64.min(self.max_map_zoom()) } else { self.max_map_zoom() };
+        if self.geo_scan_dir.as_ref() != Some(&self.current_dir) {
+            self.start_geo_scan();
+        }
+        self.geo_fitted = true; // 不要覆盖用户当前跳转的目标位置
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+            "{} — EasyShow",
+            tr(self.lang, Key::Map)
+        )));
+        ctx.request_repaint();
+    }
+
     pub fn exit_map_to_grid(&mut self, ctx: &egui::Context) {
         let keep = self.entry_index();
         self.mode = Mode::Grid;

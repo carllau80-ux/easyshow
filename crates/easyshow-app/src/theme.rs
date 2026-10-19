@@ -15,6 +15,8 @@ pub enum ThemeMode {
 /// 自绘组件的取色板(不经过 egui widgets 的那部分)。
 pub struct Palette {
     pub accent: Color32,
+    /// Selection ring color: fixed for both themes for consistent contrast.
+    pub selection: Color32,
     pub canvas_bg: Color32,
     pub card_bg: Color32,
     pub thumb_bg: Color32,
@@ -24,6 +26,7 @@ pub struct Palette {
 impl Palette {
     pub const DARK: Palette = Palette {
         accent: Color32::from_rgb(0x4d, 0xa3, 0xff),
+        selection: Color32::from_rgb(0x4d, 0xa3, 0xff),
         canvas_bg: Color32::from_rgb(0x0c, 0x0e, 0x12),
         card_bg: Color32::from_rgb(0x17, 0x1a, 0x20),
         thumb_bg: Color32::from_rgb(0x0e, 0x11, 0x16),
@@ -32,6 +35,7 @@ impl Palette {
 
     pub const LIGHT: Palette = Palette {
         accent: Color32::from_rgb(0x1d, 0x7b, 0xf0),
+        selection: Color32::from_rgb(0x4d, 0xa3, 0xff),
         canvas_bg: Color32::from_rgb(0xe9, 0xec, 0xf2),
         card_bg: Color32::from_rgb(0xff, 0xff, 0xff),
         thumb_bg: Color32::from_rgb(0xef, 0xf1, 0xf5),
