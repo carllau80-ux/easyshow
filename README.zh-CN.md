@@ -40,9 +40,9 @@ cargo test -p easyshow-core                        # 解码 / EXIF / 缩放 / �
 
 ## 版本与发布
 
-- 版本号唯一来源:`Cargo.toml` 的 `[workspace.package]`(当前 **0.2.9**),每次更新用 `packaging/bump-version.sh` 递增第三位(默认 patch)
+- 版本号唯一来源:`Cargo.toml` 的 `[workspace.package]`(当前 **0.2.10**),每次更新用 `packaging/bump-version.sh` 递增第三位(默认 patch)
 - 发布流程与 GitHub 上传步骤见 [docs/zh-CN/PUBLISHING.md](docs/zh-CN/PUBLISHING.md);打 `v*` 标签触发 GitHub Actions
-- **当前发布策略:只发布 Windows 完整版**,待 Windows 包验证通过后再发布 Linux/macOS 包;CI 暂时只构建 Windows
+- **当前发布:Windows / Linux / macOS 三平台完整版**;打 `v*` 标签会触发三平台 CI,并在同一个 GitHub Release 中发布安装包
 
 ## 文档
 
@@ -148,6 +148,6 @@ Windows 安装包特性:用户级安装(无需管理员)、开始菜单/桌面�
 - [x] 子目录卡片 / 时间轴 / 拍摄时间排序 / 聚合查看页 / 默认适应窗口 / 复制信息 / 上次目录记忆
 - [x] 地址栏导航 / 多选与删除安全 / 关于与开源组件说明
 - [ ] M3 余项:单实例
-- [ ] M4 发布:Windows 完整版已发布;Linux/macOS 待验证后发布
+- [x] M4 发布:Windows / Linux / macOS 三平台完整版已发布(v0.2.10)
 
 License:MIT OR Apache-2.0

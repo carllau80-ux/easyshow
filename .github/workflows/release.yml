@@ -1,11 +1,7 @@
 name: release
 
-# Windows full build. On a v* tag this workflow creates a GitHub Release
-# with the portable zip and the NSIS installer.
-#
-# Linux/macOS jobs are intentionally disabled until the Windows build has
-# been validated. Restore them from git history when publishing other
-# platforms (see docs/PUBLISHING.md).
+# Full builds for Linux, Windows and macOS. Pushing a v* tag creates a
+# GitHub Release with all platform artifacts.
 #
 # Lite builds are frozen at 0.2.3 and are no longer published.
 on:
@@ -17,6 +13,35 @@ permissions:
   contents: write # Release 创建/资产上传
 
 jobs:
+  linux:
+    name: Linux (.deb / tar.gz / AppImage)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: deb + tarball
+        run: bash packaging/build-linux.sh
+      - name: AppImage
+        run: |
+          set -euo pipefail
+          VERSION="$(awk -F'"' '/^\[workspace.package\]/{f=1} f&&/^version/{print $2; exit}' Cargo.toml)"
+          curl -fsSL -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          mkdir -p dist/linux
+          APP=easyshow; BIN=build/lin/easyshow
+          APPDIR="build/appimage/EasyShow.AppDir"
+          rm -rf "$APPDIR"; mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+          install -m755 "$BIN" "$APPDIR/usr/bin/$APP"
+          sed "s#Exec=/usr/bin/$APP#Exec=$APP#" "build/deb/${APP}_${VERSION}_amd64/usr/share/applications/$APP.desktop" > "$APPDIR/$APP.desktop"
+          cp assets/icon-256.png "$APPDIR/$APP.png"
+          cp assets/icon-256.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP.png"
+          ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/linux/EasyShow-${VERSION}-x86_64.AppImage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: easyshow-linux
+          path: dist/linux/*
+
   windows:
     name: Windows (zip / Setup.exe)
     runs-on: windows-latest
@@ -72,9 +97,37 @@ jobs:
           name: easyshow-windows
           path: dist/windows/*
 
+  macos:
+    name: macOS (.app / .dmg, universal)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Bundle + dmg
+        run: |
+          set -o pipefail
+          if ! bash packaging/macos/make-bundle.sh universal both > build-bundle.log 2>&1; then
+            {
+              echo '### macOS packaging failed'
+              echo '```'
+              tail -n 150 build-bundle.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            tail -n 8 build-bundle.log | while IFS= read -r line; do echo "::error::${line}"; done
+            exit 1
+          fi
+          tail -n 30 build-bundle.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: easyshow-macos
+          path: dist/macos/*
+
   release:
-    name: GitHub Release (Windows full)
-    needs: [windows]
+    name: GitHub Release (all platforms)
+    needs: [linux, windows, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -89,23 +142,27 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
+            dist/**/*.deb
+            dist/**/*.tar.gz
             dist/**/*.zip
+            dist/**/*.AppImage
             dist/**/*.exe
+            dist/**/*.dmg
           body: |
-            **EasyShow ${{ steps.ver.outputs.version }}** — a lightweight, fast desktop image viewer (Windows full build).
+            **EasyShow ${{ steps.ver.outputs.version }}** — a lightweight, fast desktop image viewer (full build).
+
+            **Platforms**
+            - Windows: portable zip with the libheif DLL closure, plus a per-user NSIS installer
+            - Linux: .deb, portable tar.gz and AppImage
+            - macOS: universal .dmg for Intel and Apple Silicon
 
             **Highlights**
-            - Folder tree, subfolder cards with covers, year/month/day timeline
-            - Fit-to-window by default, EXIF capture-time sorting, one-click copy of EXIF/location
-            - Map mode with photo-thumbnail clusters (up to 4 per cluster) and a full cluster gallery
+            - Folder tree with Explorer-style chevrons, subfolder cards, year/month/day timeline
+            - Fit-to-window by default, EXIF capture-time sorting, clickable GPS coordinates
+            - One-click copy of EXIF, place name and coordinates; mandatory delete confirmation
+            - Map mode with photo-thumbnail clusters and a full cluster gallery
             - Offline world basemap plus China province boundaries and labels
             - HEIC/AVIF, JPEG XL, SVG, PSD, HDR/EXR, animated GIF/WebP
-            - Remembers the last browsed folder (state.json)
+            - Remembers the last browsed folder; bilingual UI and light/dark themes
 
-            **Assets**
-            - `easyshow-${{ steps.ver.outputs.version }}-windows-x86_64-full.zip` — portable (includes the libheif DLL closure)
-            - `EasyShow-${{ steps.ver.outputs.version }}-Full-Setup.exe` — per-user installer
-
-            > This release is Windows-only for now. Linux/macOS packages will follow after the Windows build has been validated.
-
-            Full feature list and documentation: https://github.com/carllau80-ux/easyshow#readme
+            Full documentation: https://github.com/carllau80-ux/easyshow#readme

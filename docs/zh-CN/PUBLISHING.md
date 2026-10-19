@@ -4,7 +4,7 @@
 
 仓库:<https://github.com/carllau80-ux/easyshow>(SSH 推送已验证)。
 
-> **当前策略:只发布 Windows 完整版**,待 Windows 包验证通过后再发布 Linux/macOS。Linux/macOS 打包脚本保留在仓库中,但暂不出包;GitHub Actions 也暂时只构建 Windows。
+> **发布策略:Windows / Linux / macOS 三平台完整版**。打 `v*` 标签会触发三平台 CI,并在同一个 GitHub Release 中发布安装包;lite 仍冻结在 0.2.3。
 
 ## 版本
 
@@ -57,26 +57,19 @@ packaging/bump-version.sh minor    # 0.2.9 → 0.3.0
    git push origin v<version>
    ```
 
-   标签触发 `.github/workflows/release.yml`;当前配置下只在 `windows-latest` 构建完整版,收集 libheif DLL,生成 NSIS 安装包,并自动创建附带 zip 与 Setup.exe 的 GitHub Release。
+   标签触发 `.github/workflows/release.yml`,构建 Linux(deb/tar.gz/AppImage)、Windows(zip/Setup)与 macOS(通用 dmg),并在同一个 GitHub Release 中发布全部产物。
 
 6. **验证 Release**
 
-   打开 <https://github.com/carllau80-ux/easyshow/releases> 确认:
-   - zip 内含 `easyshow.exe` 与 DLL 闭包
-   - Setup.exe 可安装并显示新版本号
+   打开 <https://github.com/carllau80-ux/easyshow/releases> 确认三平台产物齐全:
+   - Windows:zip 内含 exe 与 DLL 闭包,Setup.exe 可安装
+   - Linux:deb、tar.gz、AppImage
+   - macOS:通用 dmg
    - 设置菜单显示的版本正确
 
 ## 手动发布
 
-CI 不可用时,把本机 `dist/windows/` 中的 zip 与 Setup.exe 手动上传到 GitHub Release 页面。
-
-## 恢复 Linux/macOS
-
-Windows 包验证通过后:
-
-1. 从 git 历史恢复 `.github/workflows/release.yml` 中的 `linux` / `macos` jobs(0.2.7 之前存在)。
-2. 更新 Release 文案与 README 的产物表。
-3. 递增一个 patch 版本并重新打标签。
+CI 不可用时,可上传本机构建产物;Linux/Windows 可在 Linux 上构建,macOS 需要 macOS 或 CI。
 
 ## 许可
 

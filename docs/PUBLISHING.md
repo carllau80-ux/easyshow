@@ -4,15 +4,15 @@
 
 Repository: <https://github.com/carllau80-ux/easyshow> (SSH push access verified).
 
-> **Current policy:** publish **Windows full builds only** until the Windows package has been validated. Linux and macOS packaging scripts stay in the repository, but they are not shipped yet. The GitHub Actions workflow is temporarily Windows-only for the same reason; restore the other jobs after validation.
+> **Release policy:** publish full builds for **Windows, Linux and macOS**. A `v*` tag runs all three CI jobs and publishes the installers in one GitHub Release. Lite builds remain frozen at 0.2.3.
 
 ## Versioning
 
 The only version source is `[workspace.package] version` in `Cargo.toml`.
 
 ```bash
-packaging/bump-version.sh          # patch bump (0.2.8 → 0.2.9)
-packaging/bump-version.sh minor    # 0.2.9 → 0.3.0
+packaging/bump-version.sh          # patch bump (0.2.9 → 0.2.10)
+packaging/bump-version.sh minor    # 0.2.10 → 0.3.0
 ```
 
 The version flows into the window title/CLI, installer filenames, the Settings dialog and release assets.
@@ -61,29 +61,19 @@ The version flows into the window title/CLI, installer filenames, the Settings d
    git push origin v<version>
    ```
 
-   The tag starts `.github/workflows/release.yml`, which (in the current Windows-only configuration) builds the full Windows package on `windows-latest`, collects the HEIC DLL closure, creates the NSIS installer, and publishes a GitHub Release with the zip and Setup executable.
+   The tag starts `.github/workflows/release.yml`, which builds Linux (deb/tar.gz/AppImage), Windows (zip/Setup) and macOS (universal dmg), then publishes a GitHub Release with all artifacts.
 
 6. **Verify the release**
 
-   Open <https://github.com/carllau80-ux/easyshow/releases> and confirm:
-   - the Windows zip contains `easyshow.exe` and the DLL closure
-   - the NSIS Setup runs and installs the expected version
+   Open <https://github.com/carllau80-ux/easyshow/releases> and confirm all platform assets are present:
+   - Windows zip contains `easyshow.exe` and the DLL closure; the NSIS Setup installs
+   - Linux .deb, tar.gz and AppImage are uploaded
+   - macOS universal .dmg is uploaded
    - the Settings dialog reports the new version
 
 ## Manual alternative
 
-If CI is unavailable, upload the locally built Windows artifacts to the GitHub Release page. The release should contain at least:
-
-- `easyshow-<ver>-windows-x86_64-full.zip`
-- `EasyShow-<ver>-Full-Setup.exe`
-
-## Re-enabling Linux/macOS
-
-Once the Windows build has been validated:
-
-1. Restore the `linux` and `macos` jobs in `.github/workflows/release.yml` from Git history (they existed before the 0.2.7 Windows-only change).
-2. Update the release-body text and the README build table.
-3. Tag a new patch version and push it.
+If CI is unavailable, upload locally built artifacts to the GitHub Release page. Windows and Linux can be built on Linux; macOS packages require macOS or CI.
 
 ## Licenses
 

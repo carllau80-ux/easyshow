@@ -40,9 +40,9 @@ If the saved directory no longer exists (removable drive, deleted folder), EasyS
 
 ## Version and releases
 
-- The single source of version truth is `[workspace.package]` in `Cargo.toml` (currently **0.2.9**). Use `packaging/bump-version.sh` to bump the patch version.
+- The single source of version truth is `[workspace.package]` in `Cargo.toml` (currently **0.2.10**). Use `packaging/bump-version.sh` to bump the patch version.
 - Release process: see [docs/PUBLISHING.md](docs/PUBLISHING.md). Pushing a `v*` tag triggers the GitHub Actions workflow.
-- **Current release policy:** Windows full builds only, until the Windows package has been validated. Linux/macOS packaging scripts are kept in the repo but are not published yet. The CI workflow is temporarily Windows-only.
+- **Current release:** full builds for **Windows, Linux and macOS**. Pushing a `v*` tag runs all three CI jobs and publishes the installers in one GitHub Release.
 
 ## Documentation
 
@@ -148,6 +148,6 @@ Measured on release builds: 24MP JPEG decode ≈ 104 ms; a 24MP image downsample
 - [x] Config persistence: network settings and last-directory restore
 - [x] Address bar navigation, selection/delete hardening, About and open-source notices
 - [ ] Remaining M3: single-instance mode
-- [ ] M4 release: Windows full builds published; Linux/macOS packaging pending validation
+- [x] M4 release: full builds for Windows, Linux and macOS published (v0.2.10)
 
 License: MIT OR Apache-2.0.
